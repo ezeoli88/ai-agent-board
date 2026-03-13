@@ -10,6 +10,33 @@
 
 ---
 
+## Status Summary (2026-03-13)
+
+| Task | Description | Status |
+|------|------------|--------|
+| 1 | Backend — Spec model + migration | DONE |
+| 2 | Backend — Spec service (CRUD) | DONE |
+| 3 | Backend — Spec Agent prompts | DONE |
+| 4 | Backend — Spec routes (CRUD + lifecycle) | DONE |
+| 5 | Backend — Build + smoke test | DONE |
+| 6 | Frontend — Spec types + API client | DONE |
+| 7 | Frontend — Spec hooks (query + mutations) | DONE |
+| 8 | Frontend — Spec SSE hook | DONE |
+| 9 | Frontend — Spec UI store + status badge | DONE |
+| 10 | Frontend — Create Spec dialog | DONE |
+| 11 | Frontend — Spec list + list item | DONE |
+| 12 | Frontend — Spec chat component | DONE |
+| 13 | Frontend — Spec drawer | DONE |
+| 14 | Frontend — Spec detail page (editor + actions) | DONE |
+| 15 | Frontend — Specs page + routing + sidebar | DONE |
+| 16 | Frontend — Data invalidation for specs | DONE |
+| 17 | Integration test — full flow | PARTIAL |
+
+### Known Issues
+- **SPA fallback not working for client-side routes** (pre-existing — `/board` also 404s on direct navigation). The server's `find_public_dir()` doesn't always find the `public/` directory when the exe is launched from a different path. Root `/` works because `ServeDir` serves `index.html` for the root, but sub-routes like `/specs` or `/board` don't fall back to `index.html`.
+
+---
+
 ## Task 1: Backend — Spec model + migration
 
 **Files:**

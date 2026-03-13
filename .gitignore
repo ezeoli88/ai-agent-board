@@ -12,6 +12,7 @@ build/
 .next/
 out/
 *.tsbuildinfo
+.astro/
 
 # Environment variables
 .env
