@@ -10,6 +10,8 @@ import DiffPage from '@/app/diff/[taskId]/page'
 import ReposPage from '@/app/repos/page'
 import SettingsPage from '@/app/settings/page'
 import McpSetupPage from '@/app/mcp-setup/page'
+import SpecsPage from '@/app/specs/page'
+import SpecDetailPage from '@/app/specs/[specId]/page'
 
 // Root route - wraps everything with Providers
 const rootRoute = createRootRoute({
@@ -105,6 +107,20 @@ const mcpSetupRoute = createRoute({
   component: McpSetupPage,
 })
 
+// Specs route
+const specsRoute = createRoute({
+  getParentRoute: () => mainLayoutRoute,
+  path: '/specs',
+  component: SpecsPage,
+})
+
+// Spec detail route
+const specDetailRoute = createRoute({
+  getParentRoute: () => mainLayoutRoute,
+  path: '/specs/$specId',
+  component: SpecDetailPage,
+})
+
 // Build route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -113,6 +129,8 @@ const routeTree = rootRoute.addChildren([
   mcpSetupRoute,
   mainLayoutRoute.addChildren([
     boardRoute,
+    specsRoute,
+    specDetailRoute,
     diffRoute,
     settingsRoute,
   ]),

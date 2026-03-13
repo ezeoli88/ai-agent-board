@@ -8,6 +8,7 @@ import type {
   PRClosedResponse,
   PRCommentsResponse,
 } from "@/features/tasks/types";
+import type { Spec, CreateSpecInput, UpdateSpecInput } from "@/features/specs/types";
 import type { ActionResponse, CleanupWorktreeResponse } from "@/types/api";
 import { getAuthToken } from "./auth";
 
@@ -313,6 +314,38 @@ export const tasksApi = {
   // PR comments
   getPRComments: (id: string): Promise<PRCommentsResponse> =>
     apiClient.get<PRCommentsResponse>(`/tasks/${id}/pr-comments`),
+};
+
+// Standalone specsApi for use with TanStack Query hooks
+export const specsApi = {
+  getAll: (filters?: { repository_id?: string }) => {
+    const params: Record<string, string | undefined> = {};
+    if (filters?.repository_id) {
+      params.repository_id = filters.repository_id;
+    }
+    return apiClient.get<Spec[]>("/specs", { params });
+  },
+
+  getById: (id: string) => apiClient.get<Spec>(`/specs/${id}`),
+
+  create: (input: CreateSpecInput) => apiClient.post<Spec>("/specs", input),
+
+  update: (id: string, input: UpdateSpecInput) =>
+    apiClient.patch<Spec>(`/specs/${id}`, input),
+
+  delete: (id: string) => apiClient.delete<void>(`/specs/${id}`),
+
+  refine: (id: string) =>
+    apiClient.post<{ status: string }>(`/specs/${id}/refine`),
+
+  sendFeedback: (id: string, message: string) =>
+    apiClient.post<{ status: string }>(`/specs/${id}/feedback`, { message }),
+
+  cancel: (id: string) =>
+    apiClient.post<{ status: string }>(`/specs/${id}/cancel`),
+
+  approve: (id: string) =>
+    apiClient.post<{ task: unknown }>(`/specs/${id}/approve`),
 };
 
 // Export types for consumers

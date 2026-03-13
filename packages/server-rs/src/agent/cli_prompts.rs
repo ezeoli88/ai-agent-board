@@ -308,6 +308,143 @@ The following plan has been reviewed and approved by the user. Follow it closely
     .to_string()
 }
 
+/// Builds a prompt for the Spec Agent to explore a codebase and generate
+/// a technical specification for a user's idea.
+pub fn build_spec_prompt(
+    user_input: &str,
+    repo_context: Option<&str>,
+    workspace_path: Option<&str>,
+) -> String {
+    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let workspace_section = build_workspace_section(workspace_path);
+
+    format!(
+        r#"You are a software design agent. Your job is to explore the codebase and produce a detailed technical specification for the following idea.
+{workspace_section}
+## User's Idea
+{user_input}
+{repo_section}
+## Your Mission
+
+1. **Explore** the codebase structure, architecture, patterns, and conventions
+2. **Analyze** what needs to change to implement the idea
+3. **Produce** a technical spec in markdown that includes:
+   - Summary of the approach
+   - Which files to create, modify, or delete
+   - Specific changes needed in each file
+   - Design decisions and their rationale
+   - Edge cases, risks, and things to watch out for
+   - Suggested order of implementation
+
+## Output Format
+
+Write your spec between these delimiters:
+
+---SPEC_START---
+(your spec in markdown)
+---SPEC_END---
+
+## Rules
+- **READ ONLY** — do NOT create, edit, or delete any files
+- Do NOT run tests, builds, or commands that modify the filesystem
+- Do NOT use git commands
+- Your output IS the spec — focus on clarity and completeness
+{FORBIDDEN_SECTION}"#
+    )
+    .trim()
+    .to_string()
+}
+
+/// Builds a prompt for the Spec Agent to revise a spec based on user feedback.
+pub fn build_spec_resume_prompt(
+    user_input: &str,
+    current_spec: &str,
+    feedback: &str,
+    repo_context: Option<&str>,
+    workspace_path: Option<&str>,
+) -> String {
+    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let workspace_section = build_workspace_section(workspace_path);
+
+    format!(
+        r#"You are a software design agent. You previously generated a spec that the user wants to revise.
+{workspace_section}
+## Original Idea
+{user_input}
+{repo_section}
+## Current Spec
+
+{current_spec}
+
+## User Feedback
+
+{feedback}
+
+## Your Mission
+
+1. Review the current spec and the user's feedback
+2. Explore additional code if needed to address the feedback
+3. Produce an updated spec that incorporates the requested changes
+
+Write your updated spec between these delimiters:
+
+---SPEC_START---
+(your updated spec in markdown)
+---SPEC_END---
+
+## Rules
+- **READ ONLY** — do NOT create, edit, or delete any files
+- Do NOT run tests, builds, or commands that modify the filesystem
+- Do NOT use git commands
+{FORBIDDEN_SECTION}"#
+    )
+    .trim()
+    .to_string()
+}
+
+/// Builds a prompt for the Spec Agent to continue refining a spec
+/// that may have been manually edited by the user.
+pub fn build_spec_refine_prompt(
+    user_input: &str,
+    current_spec: &str,
+    repo_context: Option<&str>,
+    workspace_path: Option<&str>,
+) -> String {
+    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let workspace_section = build_workspace_section(workspace_path);
+
+    format!(
+        r#"You are a software design agent. The user wants to continue refining a spec (which they may have edited manually).
+{workspace_section}
+## Original Idea
+{user_input}
+{repo_section}
+## Current Spec (may have been edited by the user)
+
+{current_spec}
+
+## Your Mission
+
+1. Review the current spec and the codebase
+2. Suggest improvements, identify gaps, or ask clarifying questions
+3. If you have enough context, produce an improved version of the spec
+
+Write your updated spec between these delimiters:
+
+---SPEC_START---
+(your updated spec in markdown)
+---SPEC_END---
+
+## Rules
+- **READ ONLY** — do NOT create, edit, or delete any files
+- Do NOT run tests, builds, or commands that modify the filesystem
+- Do NOT use git commands
+{FORBIDDEN_SECTION}"#
+    )
+    .trim()
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

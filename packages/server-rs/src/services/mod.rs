@@ -11,6 +11,7 @@ pub mod pr_comments_service;
 pub mod repo_service;
 pub mod secrets_service;
 pub mod settings_service;
+pub mod spec_service;
 pub mod stack_detector_service;
 pub mod task_event_service;
 pub mod task_service;

@@ -11,6 +11,7 @@ pub mod data;
 pub mod repos;
 pub mod secrets;
 pub mod setup;
+pub mod specs;
 pub mod tasks;
 
 use std::convert::Infallible;
@@ -45,6 +46,7 @@ pub fn api_router() -> Router<AppState> {
         .nest("/api/repos", repos::router())
         .nest("/api/secrets", secrets::router())
         .nest("/api/setup", setup::router())
+        .nest("/api/specs", specs::router())
         .nest("/api/tasks", tasks::router())
 }
 

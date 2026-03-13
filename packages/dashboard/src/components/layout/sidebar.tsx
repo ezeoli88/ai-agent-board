@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   ListTodo,
+  FileText,
   Settings,
   Plus,
   FolderGit2,
@@ -35,6 +36,11 @@ const navItems: NavItem[] = [
     title: 'Board',
     href: '/board',
     icon: LayoutGrid,
+  },
+  {
+    title: 'Specs',
+    href: '/specs',
+    icon: FileText,
   },
   {
     title: 'Tasks',

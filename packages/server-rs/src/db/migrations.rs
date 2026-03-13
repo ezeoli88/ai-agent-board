@@ -185,6 +185,32 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
                 CREATE INDEX IF NOT EXISTS idx_task_logs_event_type ON task_logs(event_type);
             ",
         },
+        Migration {
+            version: 12,
+            description: "Create specs table for Spec Agent feature",
+            sql: "
+                CREATE TABLE IF NOT EXISTS specs (
+                    id TEXT PRIMARY KEY,
+                    repository_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    user_input TEXT NOT NULL,
+                    draft_spec TEXT,
+                    final_spec TEXT,
+                    agent_type TEXT,
+                    agent_model TEXT,
+                    status TEXT DEFAULT 'draft',
+                    task_id TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    approved_at TEXT,
+                    FOREIGN KEY (repository_id) REFERENCES repositories(id),
+                    FOREIGN KEY (task_id) REFERENCES tasks(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_specs_repository_id ON specs(repository_id);
+                CREATE INDEX IF NOT EXISTS idx_specs_status ON specs(status);
+            ",
+        },
     ];
 
     for migration in &migrations {
