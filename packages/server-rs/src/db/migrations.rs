@@ -211,6 +211,29 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
                 CREATE INDEX IF NOT EXISTS idx_specs_status ON specs(status);
             ",
         },
+        Migration {
+            version: 13,
+            description: "Add spec_id to tasks, rename task_logs to event_logs",
+            sql: "
+                ALTER TABLE tasks ADD COLUMN spec_id TEXT REFERENCES specs(id);
+
+                CREATE TABLE IF NOT EXISTS event_logs (
+                    id TEXT PRIMARY KEY,
+                    entity_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL DEFAULT 'task',
+                    timestamp TEXT NOT NULL,
+                    level TEXT NOT NULL DEFAULT 'info',
+                    message TEXT NOT NULL DEFAULT '',
+                    event_type TEXT DEFAULT 'log',
+                    event_data TEXT
+                );
+                INSERT OR IGNORE INTO event_logs (id, entity_id, entity_type, timestamp, level, message, event_type, event_data)
+                    SELECT id, task_id, 'task', timestamp, level, message, event_type, event_data FROM task_logs;
+                DROP TABLE IF EXISTS task_logs;
+                CREATE INDEX IF NOT EXISTS idx_event_logs_entity ON event_logs(entity_id);
+                CREATE INDEX IF NOT EXISTS idx_event_logs_type ON event_logs(event_type);
+            ",
+        },
     ];
 
     for migration in &migrations {

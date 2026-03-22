@@ -55,12 +55,13 @@ fn table_column_whitelist() -> HashMap<&'static str, &'static [&'static str]> {
             "agent_model",
             "changes_data",
             "conflict_files",
+            "spec_id",
         ]
         .as_slice(),
     );
     m.insert(
-        "task_logs",
-        ["id", "task_id", "timestamp", "level", "message", "event_type", "event_data"].as_slice(),
+        "event_logs",
+        ["id", "entity_id", "entity_type", "timestamp", "level", "message", "event_type", "event_data"].as_slice(),
     );
     m.insert(
         "repositories",
@@ -81,7 +82,7 @@ fn table_column_whitelist() -> HashMap<&'static str, &'static [&'static str]> {
 }
 
 /// The ordered list of tables that may be exported/imported.
-const VALID_TABLES: &[&str] = &["tasks", "task_logs", "repositories"];
+const VALID_TABLES: &[&str] = &["tasks", "event_logs", "repositories"];
 
 /// Export response structure.
 #[derive(Debug, Serialize)]
@@ -90,7 +91,7 @@ struct ExportData {
     version: i32,
     exported_at: String,
     tasks: Vec<HashMap<String, Value>>,
-    task_logs: Vec<HashMap<String, Value>>,
+    event_logs: Vec<HashMap<String, Value>>,
     repositories: Vec<HashMap<String, Value>>,
 }
 
@@ -103,6 +104,9 @@ struct ImportData {
     _exported_at: Option<String>,
     #[serde(default)]
     tasks: Vec<HashMap<String, Value>>,
+    #[serde(default)]
+    event_logs: Vec<HashMap<String, Value>>,
+    /// Legacy field for backward compatibility with old exports.
     #[serde(default)]
     task_logs: Vec<HashMap<String, Value>>,
     #[serde(default)]
@@ -134,7 +138,7 @@ struct ImportResponse {
 #[derive(Debug, Serialize)]
 struct ImportCounts {
     tasks: usize,
-    task_logs: usize,
+    event_logs: usize,
     repositories: usize,
 }
 
@@ -148,7 +152,7 @@ struct DeleteResponse {
 #[derive(Debug, Serialize)]
 struct DeleteCounts {
     tasks: i64,
-    task_logs: i64,
+    event_logs: i64,
     repositories: i64,
 }
 
@@ -178,12 +182,12 @@ async fn export_data(State(state): State<AppState>) -> Result<impl IntoResponse,
         .db
         .call(|conn| {
             let tasks = get_all_rows_from_table(conn, "tasks")?;
-            let task_logs = get_all_rows_from_table(conn, "task_logs")?;
+            let event_logs = get_all_rows_from_table(conn, "event_logs")?;
             let repositories = get_all_rows_from_table(conn, "repositories")?;
 
             info!(
                 tasks = tasks.len(),
-                task_logs = task_logs.len(),
+                event_logs = event_logs.len(),
                 repositories = repositories.len(),
                 "Export completed"
             );
@@ -192,7 +196,7 @@ async fn export_data(State(state): State<AppState>) -> Result<impl IntoResponse,
                 version: 1,
                 exported_at: chrono::Utc::now().to_rfc3339(),
                 tasks,
-                task_logs,
+                event_logs,
                 repositories,
             })
         })
@@ -215,7 +219,12 @@ async fn import_data(
     let merge = query.merge.as_deref() == Some("true");
 
     let tasks_data = body.tasks;
-    let task_logs_data = body.task_logs;
+    // Accept both event_logs (new) and task_logs (legacy) for backward compatibility
+    let event_logs_data = if !body.event_logs.is_empty() {
+        body.event_logs
+    } else {
+        body.task_logs
+    };
     let repositories_data = body.repositories;
 
     let imported = state
@@ -223,7 +232,7 @@ async fn import_data(
         .with_transaction(move |conn| {
             if !merge {
                 // Delete in correct order due to foreign key constraints
-                conn.execute("DELETE FROM task_logs", [])
+                conn.execute("DELETE FROM event_logs", [])
                     .map_err(AppError::Database)?;
                 conn.execute("DELETE FROM tasks", [])
                     .map_err(AppError::Database)?;
@@ -236,11 +245,11 @@ async fn import_data(
 
             let tasks_inserted =
                 insert_rows(conn, "tasks", &tasks_data, whitelist.get("tasks").unwrap())?;
-            let task_logs_inserted = insert_rows(
+            let event_logs_inserted = insert_rows(
                 conn,
-                "task_logs",
-                &task_logs_data,
-                whitelist.get("task_logs").unwrap(),
+                "event_logs",
+                &event_logs_data,
+                whitelist.get("event_logs").unwrap(),
             )?;
             let repos_inserted = insert_rows(
                 conn,
@@ -251,7 +260,7 @@ async fn import_data(
 
             info!(
                 tasks = tasks_inserted,
-                task_logs = task_logs_inserted,
+                event_logs = event_logs_inserted,
                 repositories = repos_inserted,
                 merged = merge,
                 "Import completed"
@@ -259,7 +268,7 @@ async fn import_data(
 
             Ok(ImportCounts {
                 tasks: tasks_inserted,
-                task_logs: task_logs_inserted,
+                event_logs: event_logs_inserted,
                 repositories: repos_inserted,
             })
         })
@@ -294,15 +303,15 @@ async fn delete_all_data(
             let count_tasks: i64 = conn
                 .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
                 .map_err(AppError::Database)?;
-            let count_task_logs: i64 = conn
-                .query_row("SELECT COUNT(*) FROM task_logs", [], |row| row.get(0))
+            let count_event_logs: i64 = conn
+                .query_row("SELECT COUNT(*) FROM event_logs", [], |row| row.get(0))
                 .map_err(AppError::Database)?;
             let count_repos: i64 = conn
                 .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
                 .map_err(AppError::Database)?;
 
             // Delete in correct order for foreign keys
-            conn.execute("DELETE FROM task_logs", [])
+            conn.execute("DELETE FROM event_logs", [])
                 .map_err(AppError::Database)?;
             conn.execute("DELETE FROM tasks", [])
                 .map_err(AppError::Database)?;
@@ -311,14 +320,14 @@ async fn delete_all_data(
 
             info!(
                 tasks = count_tasks,
-                task_logs = count_task_logs,
+                event_logs = count_event_logs,
                 repositories = count_repos,
                 "All data deleted"
             );
 
             Ok(DeleteCounts {
                 tasks: count_tasks,
-                task_logs: count_task_logs,
+                event_logs: count_event_logs,
                 repositories: count_repos,
             })
         })

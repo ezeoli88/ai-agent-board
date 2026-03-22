@@ -12,7 +12,7 @@ import type { SpecStatus } from '../types'
 import { SPEC_STATUS_LABELS } from '../types'
 import { cn } from '@/lib/utils'
 
-const FILTER_STATUSES: SpecStatus[] = ['draft', 'refining', 'approved', 'failed', 'canceled']
+const FILTER_STATUSES: SpecStatus[] = ['draft', 'generating', 'ready', 'failed', 'cancelled']
 
 export function SpecList() {
   const { selectedRepoId } = useRepoStore()

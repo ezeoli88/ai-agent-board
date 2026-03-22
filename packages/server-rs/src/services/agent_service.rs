@@ -6,12 +6,13 @@ use tokio::sync::RwLock;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 
-use crate::agent::{APIAgentRunner, APIRunnerOptions, CLIAgentRunner, CLIRunnerOptions};
+use crate::agent::{AgentEntityContext, APIAgentRunner, APIRunnerOptions, CLIAgentRunner, CLIRunnerOptions};
 use crate::db::Database;
 use crate::error::AppError;
 use crate::models::task::{TaskStatus, UpdateTaskInput};
+use crate::models::spec::SpecStatus;
 use crate::services::git_service::GitService;
-use crate::services::task_service;
+use crate::services::{task_service, spec_service};
 use crate::utils::{DataEventEmitter, SSEEmitter};
 
 /// Default timeout duration (10 minutes).
@@ -103,15 +104,19 @@ impl AgentService {
     /// The result of the agent run is communicated via SSE events.
     pub async fn start_agent(
         &self,
-        task_id: &str,
+        entity_context: AgentEntityContext,
         options: RunnerOptions,
     ) -> Result<(), AppError> {
+        let entity_id = entity_context.entity_id().to_string();
+
         // Check if agent is already running
         {
             let agents = self.active_agents.read().await;
-            if agents.contains_key(task_id) {
+            if agents.contains_key(&entity_id) {
                 return Err(AppError::Conflict(format!(
-                    "Agent is already running for task {task_id}"
+                    "Agent is already running for {} {}",
+                    entity_context.entity_type(),
+                    entity_id
                 )));
             }
         }
@@ -119,14 +124,14 @@ impl AgentService {
         // Initialize logs
         {
             let mut logs = self.agent_logs.write().await;
-            logs.entry(task_id.to_string()).or_default();
+            logs.entry(entity_id.clone()).or_default();
         }
 
         // Extract workspace path and create the appropriate runner
         let (workspace_path, cancel_token, feedback_tx, runner_kind) = match options {
             RunnerOptions::CLI(cli_opts) => {
                 self.log(
-                    task_id,
+                    &entity_id,
                     "info",
                     &format!("Starting CLI agent: {}", cli_opts.agent_type),
                     None,
@@ -140,7 +145,7 @@ impl AgentService {
             }
             RunnerOptions::API(api_opts) => {
                 self.log(
-                    task_id,
+                    &entity_id,
                     "info",
                     &format!("Starting API agent: {}", api_opts.agent_type),
                     None,
@@ -161,9 +166,9 @@ impl AgentService {
         {
             let mut agents = self.active_agents.write().await;
             agents.insert(
-                task_id.to_string(),
+                entity_id.clone(),
                 AgentTracking {
-                    task_id: task_id.to_string(),
+                    task_id: entity_id.clone(),
                     started_at: now,
                     timeout_at,
                     warning_sent: false,
@@ -179,7 +184,8 @@ impl AgentService {
         let active_agents = Arc::clone(&self.active_agents);
         let _agent_logs = Arc::clone(&self.agent_logs);
         let db = self.db.clone();
-        let task_id_bg = task_id.to_string();
+        let entity_id_bg = entity_id.clone();
+        let entity_context_bg = entity_context.clone();
 
         tokio::spawn(async move {
             let result = match runner_kind {
@@ -187,139 +193,31 @@ impl AgentService {
                 RunnerKind::API(mut runner) => runner.run(&sse).await,
             };
 
-            match &result {
-                Ok(res) if res.success => {
-                    info!(task_id = %task_id_bg, "Agent completed successfully");
-                    sse.emit_log(&task_id_bg, "info", "Agent completed successfully", None)
-                        .await;
-
-                    // Extract changes from the workspace (git diff)
-                    // Use base_commit (captured at task start) so the diff is
-                    // scoped to only this task's changes, not all accumulated
-                    // changes from previous tasks in the same worktree.
-                    sse.emit_log(&task_id_bg, "info", "Extracting changes from workspace...", None)
-                        .await;
-                    let base_commit = if let Some(ref db) = db {
-                        let tid = task_id_bg.clone();
-                        db.call(move |conn| {
-                            task_service::get_task_by_id(conn, &tid)
-                        })
-                        .await
-                        .ok()
-                        .and_then(|t| t.base_commit)
-                    } else {
-                        None
-                    };
-                    let changes_data = extract_changes_data(
-                        &workspace_path,
-                        base_commit.as_deref(),
-                    ).await;
-                    if changes_data.is_some() {
-                        sse.emit_log(&task_id_bg, "info", "Changes data extracted successfully", None)
-                            .await;
-                    } else {
-                        sse.emit_log(&task_id_bg, "warn", "No changes detected in workspace", None)
-                            .await;
-                    }
-
-                    // Update task status to awaiting_review and persist changes
-                    if let Some(ref db) = db {
-                        let tid = task_id_bg.clone();
-                        let pr_url = res.pr_url.clone();
-                        let _ = db
-                            .call(move |conn| {
-                                task_service::update_task(
-                                    conn,
-                                    &tid,
-                                    &UpdateTaskInput {
-                                        status: Some(TaskStatus::AwaitingReview),
-                                        changes_data: changes_data.map(Some),
-                                        pr_url: pr_url.map(Some),
-                                        ..Default::default()
-                                    },
-                                )
-                            })
-                            .await;
-                    }
-
-                    sse.emit_status(&task_id_bg, "awaiting_review").await;
-                    // Emit awaiting_review (non-terminal) — NOT complete.
-                    // The frontend closes the SSE connection on "complete",
-                    // which would prevent live events if the user resumes the
-                    // agent via feedback. "awaiting_review" keeps the
-                    // connection open, matching the TypeScript server behavior.
-                    sse.emit_awaiting_review(
-                        &task_id_bg,
-                        "Agent completed. Review changes before creating PR.",
-                    )
-                    .await;
+            match &entity_context_bg {
+                AgentEntityContext::Task { task_id } => {
+                    handle_task_completion(&result, task_id, &workspace_path, &sse, &db).await;
                 }
-                Ok(res) => {
-                    let err = res.error.as_deref().unwrap_or("Unknown error");
-                    warn!(task_id = %task_id_bg, error = err, "Agent failed");
-
-                    // Update task status to failed
-                    if let Some(ref db) = db {
-                        let tid = task_id_bg.clone();
-                        let err_msg = err.to_string();
-                        let changes = res.changes_data.clone();
-                        let _ = db
-                            .call(move |conn| {
-                                task_service::update_task(
-                                    conn,
-                                    &tid,
-                                    &UpdateTaskInput {
-                                        status: Some(TaskStatus::Failed),
-                                        error: Some(Some(err_msg)),
-                                        changes_data: changes.map(Some),
-                                        ..Default::default()
-                                    },
-                                )
-                            })
-                            .await;
-                    }
-
-                    sse.emit_error(&task_id_bg, err).await;
-                    sse.emit_status(&task_id_bg, "failed").await;
-                }
-                Err(e) => {
-                    error!(task_id = %task_id_bg, error = %e, "Agent error");
-
-                    // Update task status to failed
-                    if let Some(ref db) = db {
-                        let tid = task_id_bg.clone();
-                        let err_msg = e.to_string();
-                        let _ = db
-                            .call(move |conn| {
-                                task_service::update_task(
-                                    conn,
-                                    &tid,
-                                    &UpdateTaskInput {
-                                        status: Some(TaskStatus::Failed),
-                                        error: Some(Some(err_msg)),
-                                        ..Default::default()
-                                    },
-                                )
-                            })
-                            .await;
-                    }
-
-                    sse.emit_error(&task_id_bg, &e.to_string()).await;
-                    sse.emit_status(&task_id_bg, "failed").await;
+                AgentEntityContext::Spec { spec_id } => {
+                    handle_spec_completion(&result, spec_id, &sse, &db).await;
                 }
             }
 
-            data_emitter.emit_change("task", "updated", Some(&task_id_bg));
+            data_emitter.emit_change(
+                entity_context_bg.entity_type(),
+                "updated",
+                Some(&entity_id_bg),
+            );
 
             // Remove from active agents
             {
                 let mut agents = active_agents.write().await;
-                agents.remove(&task_id_bg);
+                agents.remove(&entity_id_bg);
             }
         });
 
         info!(
-            task_id,
+            entity_id = %entity_id,
+            entity_type = entity_context.entity_type(),
             timeout_at = ?timeout_at,
             "Agent started successfully"
         );
@@ -419,6 +317,155 @@ impl AgentService {
             Err(AppError::NotFound(format!(
                 "No active agent for task {task_id}"
             )))
+        }
+    }
+}
+
+/// Handles completion of a task agent run.
+async fn handle_task_completion(
+    result: &Result<crate::agent::AgentRunResult, AppError>,
+    task_id: &str,
+    workspace_path: &std::path::Path,
+    sse: &Arc<SSEEmitter>,
+    db: &Option<Database>,
+) {
+    match result {
+        Ok(res) if res.success => {
+            info!(task_id = %task_id, "Agent completed successfully");
+            sse.emit_log(task_id, "info", "Agent completed successfully", None).await;
+
+            sse.emit_log(task_id, "info", "Extracting changes from workspace...", None).await;
+            let base_commit = if let Some(ref db) = db {
+                let tid = task_id.to_string();
+                db.call(move |conn| task_service::get_task_by_id(conn, &tid))
+                    .await
+                    .ok()
+                    .and_then(|t| t.base_commit)
+            } else {
+                None
+            };
+            let changes_data = extract_changes_data(workspace_path, base_commit.as_deref()).await;
+            if changes_data.is_some() {
+                sse.emit_log(task_id, "info", "Changes data extracted successfully", None).await;
+            } else {
+                sse.emit_log(task_id, "warn", "No changes detected in workspace", None).await;
+            }
+
+            if let Some(ref db) = db {
+                let tid = task_id.to_string();
+                let pr_url = res.pr_url.clone();
+                let _ = db
+                    .call(move |conn| {
+                        task_service::update_task(conn, &tid, &UpdateTaskInput {
+                            status: Some(TaskStatus::AwaitingReview),
+                            changes_data: changes_data.map(Some),
+                            pr_url: pr_url.map(Some),
+                            ..Default::default()
+                        })
+                    })
+                    .await;
+            }
+
+            sse.emit_status(task_id, "awaiting_review").await;
+            sse.emit_awaiting_review(task_id, "Agent completed. Review changes before creating PR.").await;
+        }
+        Ok(res) => {
+            let err = res.error.as_deref().unwrap_or("Unknown error");
+            warn!(task_id = %task_id, error = err, "Agent failed");
+
+            if let Some(ref db) = db {
+                let tid = task_id.to_string();
+                let err_msg = err.to_string();
+                let changes = res.changes_data.clone();
+                let _ = db
+                    .call(move |conn| {
+                        task_service::update_task(conn, &tid, &UpdateTaskInput {
+                            status: Some(TaskStatus::Failed),
+                            error: Some(Some(err_msg)),
+                            changes_data: changes.map(Some),
+                            ..Default::default()
+                        })
+                    })
+                    .await;
+            }
+
+            sse.emit_error(task_id, err).await;
+            sse.emit_status(task_id, "failed").await;
+        }
+        Err(e) => {
+            error!(task_id = %task_id, error = %e, "Agent error");
+
+            if let Some(ref db) = db {
+                let tid = task_id.to_string();
+                let err_msg = e.to_string();
+                let _ = db
+                    .call(move |conn| {
+                        task_service::update_task(conn, &tid, &UpdateTaskInput {
+                            status: Some(TaskStatus::Failed),
+                            error: Some(Some(err_msg)),
+                            ..Default::default()
+                        })
+                    })
+                    .await;
+            }
+
+            sse.emit_error(task_id, &e.to_string()).await;
+            sse.emit_status(task_id, "failed").await;
+        }
+    }
+}
+
+/// Handles completion of a spec agent run.
+async fn handle_spec_completion(
+    result: &Result<crate::agent::AgentRunResult, AppError>,
+    spec_id: &str,
+    sse: &Arc<SSEEmitter>,
+    db: &Option<Database>,
+) {
+    match result {
+        Ok(res) if res.success => {
+            info!(spec_id = %spec_id, "Spec agent completed successfully");
+            let spec_content = res.summary.clone();
+
+            if let Some(ref db) = db {
+                if let Err(e) = spec_service::update_spec_status(
+                    db, spec_id, SpecStatus::Ready, spec_content, None,
+                ).await {
+                    error!(spec_id = %spec_id, error = %e, "Failed to update spec status to ready");
+                }
+            }
+
+            sse.emit_status(spec_id, "ready").await;
+            sse.emit_complete(spec_id, None, res.summary.as_deref()).await;
+        }
+        Ok(res) => {
+            let err = res.error.as_deref().unwrap_or("Unknown error");
+            warn!(spec_id = %spec_id, error = err, "Spec agent failed");
+
+            if let Some(ref db) = db {
+                if let Err(e) = spec_service::update_spec_status(
+                    db, spec_id, SpecStatus::Failed, None, Some(err.to_string()),
+                ).await {
+                    error!(spec_id = %spec_id, error = %e, "Failed to update spec status to failed");
+                }
+            }
+
+            sse.emit_error(spec_id, err).await;
+            sse.emit_status(spec_id, "failed").await;
+        }
+        Err(e) => {
+            error!(spec_id = %spec_id, error = %e, "Spec agent error");
+
+            if let Some(ref db) = db {
+                if let Err(err) = spec_service::update_spec_status(
+                    db, spec_id, SpecStatus::Failed, None, Some(e.to_string()),
+                ).await {
+                    error!(spec_id = %spec_id, error = %err, "Failed to update spec status to failed");
+                }
+            }
+
+            sse.emit_error(spec_id, &e.to_string()).await;
+            sse.emit_status(spec_id, "failed").await;
         }
     }
 }

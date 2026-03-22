@@ -6,6 +6,7 @@
 use rusqlite::{Connection, Row};
 use tracing::{debug, info, warn};
 
+use crate::db::Database;
 use crate::error::AppError;
 use crate::models::spec::{CreateSpecInput, Spec, SpecStatus, UpdateSpecInput};
 
@@ -306,6 +307,34 @@ pub fn delete_spec(conn: &Connection, id: &str) -> Result<(), AppError> {
 }
 
 // ============================================================================
+// Async helpers (used from agent_service completion logic)
+// ============================================================================
+
+/// Updates a spec's status, optionally setting spec_content and error.
+///
+/// This is an async function that uses `Database.call()` for use from
+/// the agent service completion handler.
+pub async fn update_spec_status(
+    db: &Database,
+    spec_id: &str,
+    status: SpecStatus,
+    draft_spec: Option<String>,
+    _error_msg: Option<String>,
+) -> Result<(), AppError> {
+    let spec_id = spec_id.to_string();
+    let status_str = status.to_string();
+    info!(spec_id = %spec_id, status = %status_str, "Updating spec status");
+    db.call(move |conn| {
+        conn.execute(
+            "UPDATE specs SET status = ?1, draft_spec = COALESCE(?2, draft_spec), updated_at = datetime('now') WHERE id = ?3",
+            rusqlite::params![status_str, draft_spec, spec_id],
+        ).map_err(AppError::Database)?;
+        Ok(())
+    })
+    .await
+}
+
+// ============================================================================
 // Internal helpers
 // ============================================================================
 
@@ -523,12 +552,12 @@ mod tests {
 
         let update = UpdateSpecInput {
             title: Some("Updated Title".to_string()),
-            status: Some(SpecStatus::Refining),
+            status: Some(SpecStatus::Generating),
             ..Default::default()
         };
         let updated = update_spec(&conn, &spec.id, &update).unwrap();
         assert_eq!(updated.title, "Updated Title");
-        assert_eq!(updated.status, SpecStatus::Refining);
+        assert_eq!(updated.status, SpecStatus::Generating);
     }
 
     #[test]

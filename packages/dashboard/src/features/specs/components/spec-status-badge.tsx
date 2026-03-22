@@ -7,10 +7,10 @@ const STATUS_VARIANT_MAP: Record<
   'default' | 'secondary' | 'destructive' | 'success'
 > = {
   draft: 'secondary',
-  refining: 'default',
-  approved: 'success',
+  generating: 'default',
+  ready: 'success',
   failed: 'destructive',
-  canceled: 'secondary',
+  cancelled: 'secondary',
 }
 
 interface SpecStatusBadgeProps {

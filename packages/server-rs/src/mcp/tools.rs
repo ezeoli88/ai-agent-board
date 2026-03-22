@@ -605,6 +605,7 @@ async fn handle_create_task(state: &AppState, args: Value) -> Value {
         build_command: args["build_command"].as_str().map(String::from),
         agent_type: args["agent_type"].as_str().map(String::from),
         agent_model: args["agent_model"].as_str().map(String::from),
+        spec_id: args["spec_id"].as_str().map(String::from),
     };
 
     let result = state

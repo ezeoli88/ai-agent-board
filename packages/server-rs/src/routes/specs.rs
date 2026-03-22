@@ -25,7 +25,7 @@ use tracing::{info, warn};
 
 use crate::agent::cli_prompts;
 use crate::agent::types::AgentType;
-use crate::agent::{APIRunnerOptions, CLIRunnerOptions};
+use crate::agent::{APIRunnerOptions, CLIRunnerOptions, AgentEntityContext};
 use crate::error::AppError;
 use crate::models::spec::{CreateSpecInput, SpecStatus, UpdateSpecInput};
 use crate::services::agent_service::RunnerOptions;
@@ -204,7 +204,7 @@ async fn refine_spec(
         .await?;
 
     // Validate status
-    if spec.status != SpecStatus::Draft && spec.status != SpecStatus::Refining {
+    if spec.status != SpecStatus::Draft && spec.status != SpecStatus::Generating {
         return Err(AppError::Validation(format!(
             "Cannot refine spec with status: {}. Valid statuses: draft, refining",
             spec.status
@@ -220,14 +220,14 @@ async fn refine_spec(
                 conn,
                 &spec_id,
                 &UpdateSpecInput {
-                    status: Some(SpecStatus::Refining),
+                    status: Some(SpecStatus::Generating),
                     ..Default::default()
                 },
             )
         })
         .await?;
 
-    state.sse_emitter.emit_status(&id, "refining").await;
+    state.sse_emitter.emit_status(&id, "generating").await;
 
     // Resolve workspace: get repo, find local path, build repo context
     let repo_id = spec.repository_id.clone();
@@ -299,7 +299,7 @@ async fn refine_spec(
             })?;
 
         RunnerOptions::API(APIRunnerOptions {
-            task_id: id.clone(),
+            entity_id: id.clone(),
             agent_type,
             prompt,
             model: spec.agent_model.clone(),
@@ -308,7 +308,7 @@ async fn refine_spec(
         })
     } else {
         RunnerOptions::CLI(CLIRunnerOptions {
-            task_id: id.clone(),
+            entity_id: id.clone(),
             agent_type,
             prompt,
             model: spec.agent_model.clone(),
@@ -321,7 +321,7 @@ async fn refine_spec(
     // Start agent
     state
         .agent_service
-        .start_agent(&id, runner_options)
+        .start_agent(AgentEntityContext::Spec { spec_id: id.clone() }, runner_options)
         .await?;
 
     // Spawn background task to handle agent completion
@@ -431,7 +431,7 @@ async fn refine_spec(
         .emit_change("spec", "updated", Some(&id));
 
     Ok(Json(json!({
-        "status": "refining",
+        "status": "generating",
         "message": "Spec agent started"
     })))
 }
@@ -483,7 +483,7 @@ async fn send_feedback(
         .await?;
 
     // Don't allow resume for terminal statuses
-    let terminal = [SpecStatus::Approved, SpecStatus::Failed, SpecStatus::Canceled];
+    let terminal = [SpecStatus::Ready, SpecStatus::Failed, SpecStatus::Cancelled];
     if terminal.contains(&spec.status) {
         return Err(AppError::Validation(format!(
             "Spec is in {} status. Cannot resume the agent.",
@@ -503,14 +503,14 @@ async fn send_feedback(
                 conn,
                 &spec_id,
                 &UpdateSpecInput {
-                    status: Some(SpecStatus::Refining),
+                    status: Some(SpecStatus::Generating),
                     ..Default::default()
                 },
             )
         })
         .await?;
 
-    state.sse_emitter.emit_status(&id, "refining").await;
+    state.sse_emitter.emit_status(&id, "generating").await;
 
     // Resolve workspace
     let repo_id = spec.repository_id.clone();
@@ -564,7 +564,7 @@ async fn send_feedback(
             })?;
 
         RunnerOptions::API(APIRunnerOptions {
-            task_id: id.clone(),
+            entity_id: id.clone(),
             agent_type,
             prompt,
             model: spec.agent_model.clone(),
@@ -573,7 +573,7 @@ async fn send_feedback(
         })
     } else {
         RunnerOptions::CLI(CLIRunnerOptions {
-            task_id: id.clone(),
+            entity_id: id.clone(),
             agent_type,
             prompt,
             model: spec.agent_model.clone(),
@@ -585,7 +585,7 @@ async fn send_feedback(
 
     state
         .agent_service
-        .start_agent(&id, runner_options)
+        .start_agent(AgentEntityContext::Spec { spec_id: id.clone() }, runner_options)
         .await?;
 
     // Spawn background task to handle agent completion (same pattern as refine)
@@ -675,7 +675,7 @@ async fn cancel_spec(
 
     let spec_id = id.clone();
     let update = UpdateSpecInput {
-        status: Some(SpecStatus::Canceled),
+        status: Some(SpecStatus::Cancelled),
         ..Default::default()
     };
 
@@ -692,13 +692,13 @@ async fn cancel_spec(
         .sse_emitter
         .emit_error(&id, "Spec refinement canceled by user")
         .await;
-    state.sse_emitter.emit_status(&id, "canceled").await;
+    state.sse_emitter.emit_status(&id, "cancelled").await;
 
     state
         .data_emitter
         .emit_change("spec", "updated", Some(&id));
 
-    Ok(Json(json!({ "status": "canceled" })))
+    Ok(Json(json!({ "status": "cancelled" })))
 }
 
 /// POST /api/specs/:id/approve - Approve the spec and create a Task.
@@ -770,7 +770,7 @@ async fn approve_spec(
                 conn,
                 &spec_id,
                 &UpdateSpecInput {
-                    status: Some(SpecStatus::Approved),
+                    status: Some(SpecStatus::Ready),
                     task_id: Some(Some(task_id_for_spec)),
                     approved_at: Some(Some(now)),
                     ..Default::default()
@@ -787,11 +787,11 @@ async fn approve_spec(
         .emit_change("task", "created", Some(&task.id));
 
     Ok(Json(json!({
-        "status": "approved",
+        "status": "ready",
         "task": {
             "id": task.id,
             "title": task.title,
-            "status": "approved",
+            "status": "ready",
         }
     })))
 }
@@ -816,7 +816,7 @@ async fn spec_logs_stream(
         let db_events = state
             .db
             .call(move |conn| {
-                crate::services::task_event_service::get_events_for_task(conn, &spec_id_for_db)
+                crate::services::task_event_service::get_events_for_entity(conn, &spec_id_for_db)
             })
             .await
             .unwrap_or_default();
@@ -876,21 +876,21 @@ async fn spec_logs_stream(
     // Determine if spec is in a terminal state
     let is_terminal = matches!(
         current_status.as_deref(),
-        Some("approved") | Some("failed") | Some("canceled")
+        Some("ready") | Some("failed") | Some("cancelled")
     );
 
     if is_terminal {
         if let Some(ref spec) = spec_opt {
             match current_status.as_deref() {
-                Some("approved") => {
+                Some("ready") => {
                     let data = serde_json::to_string(&json!({
                         "message": "Spec approved and task created"
                     }))
                     .unwrap_or_default();
                     replay_events.push(Ok(Event::default().event("complete").data(data)));
                 }
-                Some("failed") | Some("canceled") => {
-                    let msg = if spec.status == SpecStatus::Canceled {
+                Some("failed") | Some("cancelled") => {
+                    let msg = if spec.status == SpecStatus::Cancelled {
                         "Spec refinement was canceled"
                     } else {
                         "Spec refinement failed"

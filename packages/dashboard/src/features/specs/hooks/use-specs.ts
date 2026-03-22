@@ -11,7 +11,7 @@ export function useSpecs(filters: { repository_id?: string } = {}) {
     staleTime: 30_000,
     refetchInterval: (query) => {
       const specs = query.state.data
-      if (specs?.some(s => s.status === 'refining')) return 3000
+      if (specs?.some(s => s.status === 'generating')) return 3000
       return false
     },
   })

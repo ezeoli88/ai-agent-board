@@ -207,6 +207,19 @@ export {
   type SetupError,
 } from './types/setup.types.js';
 
+// Spec schemas
+export {
+  SPEC_STATUSES,
+  SpecStatusSchema,
+  SpecSchema,
+  CreateSpecSchema,
+  UpdateSpecSchema,
+  type SpecStatus,
+  type Spec,
+  type CreateSpecInput,
+  type UpdateSpecInput,
+} from './schemas/spec.schema.js';
+
 // Agent schemas
 export {
   AgentTypeSchema,

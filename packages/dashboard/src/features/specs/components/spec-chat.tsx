@@ -3,14 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   MessageSquare,
-  FileText,
-  Pencil,
   Terminal,
-  FilePlus,
-  Search,
   Loader2,
-  Check,
-  X,
   Send,
   Keyboard,
   AlertCircle,
@@ -19,7 +13,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
+import { ChatMessageBubble, ToolBadge } from '@/components/shared/chat'
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -38,93 +32,6 @@ interface SpecChatProps {
   className?: string
   /** Callback when the user wants to navigate to the spec preview tab */
   onViewSpec?: () => void
-}
-
-// ============================================================================
-// Tool icon mapping (replicates task-chat pattern)
-// ============================================================================
-
-function getToolIcon(name: string) {
-  const lower = name.toLowerCase()
-  if (lower === 'read') return FileText
-  if (lower === 'edit') return Pencil
-  if (lower === 'bash') return Terminal
-  if (lower === 'write') return FilePlus
-  if (lower === 'grep' || lower === 'glob') return Search
-  return Terminal
-}
-
-// ============================================================================
-// ChatMessageBubble
-// ============================================================================
-
-function ChatMessageBubble({ message }: { message: ChatMessageEvent }) {
-  if (message.role === 'system') {
-    return (
-      <div className="flex justify-center py-1.5">
-        <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">
-          {message.content}
-        </span>
-      </div>
-    )
-  }
-
-  if (message.role === 'user') {
-    return (
-      <div className="flex justify-end py-1.5">
-        <div className="max-w-[85%] rounded-lg px-3 py-2 bg-blue-600 dark:bg-blue-500 text-white dark:text-white">
-          <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
-        </div>
-      </div>
-    )
-  }
-
-  // assistant
-  return (
-    <div className="flex justify-start py-1.5">
-      <div className="max-w-[85%] rounded-lg px-3 py-2 bg-zinc-800 dark:bg-zinc-200 text-zinc-100 dark:text-zinc-900">
-        <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
-      </div>
-    </div>
-  )
-}
-
-// ============================================================================
-// ToolBadge
-// ============================================================================
-
-function ToolBadge({ activity }: { activity: ToolActivityEvent }) {
-  const Icon = getToolIcon(activity.name)
-  const displayName = activity.name || 'Tool'
-
-  const cleanSummary = activity.summary
-    ? activity.summary
-        .replace(/^.*[/\\]worktrees[/\\][^/\\]+[/\\]/, '')
-        .replace(/^.*[/\\](?=[^/\\]+$)/, '')
-    : ''
-
-  return (
-    <div className="flex items-center py-0.5">
-      <Badge
-        variant="secondary"
-        className="gap-1.5 px-2 py-0.5 text-xs font-normal bg-zinc-800 dark:bg-zinc-200 text-zinc-300 dark:text-zinc-600 border-0 max-w-full"
-      >
-        {activity.status === 'running' ? (
-          <Loader2 className="size-3 animate-spin text-blue-400 dark:text-blue-600 shrink-0" />
-        ) : activity.status === 'completed' ? (
-          <Check className="size-3 text-emerald-400 dark:text-emerald-600 shrink-0" />
-        ) : activity.status === 'error' ? (
-          <X className="size-3 text-red-400 dark:text-red-600 shrink-0" />
-        ) : (
-          <Icon className="size-3 shrink-0" />
-        )}
-        <span className="font-medium text-zinc-200 dark:text-zinc-700">{displayName}</span>
-        {cleanSummary && (
-          <span className="truncate max-w-[300px] text-zinc-400 dark:text-zinc-500">{cleanSummary}</span>
-        )}
-      </Badge>
-    </div>
-  )
 }
 
 // ============================================================================
@@ -317,7 +224,7 @@ interface ChatEntry {
 // SpecChat (main component)
 // ============================================================================
 
-const TERMINAL_STATUSES = ['approved', 'failed', 'canceled']
+const TERMINAL_STATUSES = ['ready', 'failed', 'cancelled']
 
 export function SpecChat({ spec, className, onViewSpec }: SpecChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -325,20 +232,20 @@ export function SpecChat({ spec, className, onViewSpec }: SpecChatProps) {
   const [entries, setEntries] = useState<ChatEntry[]>([])
 
   const isTerminal = TERMINAL_STATUSES.includes(spec.status)
-  const canChat = spec.status === 'draft' || spec.status === 'refining'
+  const canChat = spec.status === 'draft' || spec.status === 'generating'
 
   const disabledReason = isTerminal
-    ? spec.status === 'approved'
+    ? spec.status === 'ready'
       ? 'This spec has been approved and sent to coding.'
       : spec.status === 'failed'
         ? 'The agent encountered an error.'
-        : 'This spec has been canceled.'
+        : 'This spec has been cancelled.'
     : undefined
 
   // SSE connection: only connect if the spec is actively being refined
   const { logs, chatMessages, toolActivities, isAgentRunning } = useSpecSSE({
     specId: spec.id,
-    enabled: spec.status === 'refining',
+    enabled: spec.status === 'generating',
   })
 
   // Build interleaved entries from SSE chat messages and tool activities

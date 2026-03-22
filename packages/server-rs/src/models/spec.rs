@@ -4,24 +4,24 @@ use serde::{Deserialize, Serialize};
 pub enum SpecStatus {
     #[serde(rename = "draft")]
     Draft,
-    #[serde(rename = "refining")]
-    Refining,
-    #[serde(rename = "approved")]
-    Approved,
+    #[serde(rename = "generating")]
+    Generating,
+    #[serde(rename = "ready")]
+    Ready,
     #[serde(rename = "failed")]
     Failed,
-    #[serde(rename = "canceled")]
-    Canceled,
+    #[serde(rename = "cancelled")]
+    Cancelled,
 }
 
 impl SpecStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Draft => "draft",
-            Self::Refining => "refining",
-            Self::Approved => "approved",
+            Self::Generating => "generating",
+            Self::Ready => "ready",
             Self::Failed => "failed",
-            Self::Canceled => "canceled",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -37,10 +37,10 @@ impl std::str::FromStr for SpecStatus {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "draft" => Ok(Self::Draft),
-            "refining" => Ok(Self::Refining),
-            "approved" => Ok(Self::Approved),
+            "generating" => Ok(Self::Generating),
+            "ready" => Ok(Self::Ready),
             "failed" => Ok(Self::Failed),
-            "canceled" => Ok(Self::Canceled),
+            "cancelled" => Ok(Self::Cancelled),
             other => Err(format!("unknown spec status: '{other}'")),
         }
     }

@@ -1,6 +1,7 @@
 'use client'
 
-import { ExternalLink, GitBranch, Calendar, FileCode, Terminal, AlertCircle, CheckCircle } from 'lucide-react'
+import { ExternalLink, GitBranch, Calendar, FileCode, Terminal, AlertCircle, CheckCircle, FileText } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { formatDate, extractRepoName } from '@/lib/formatters'
@@ -110,6 +111,24 @@ export function TaskMetadata({ task }: TaskMetadataProps) {
                 {task.pr_url}
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
+            </div>
+          )}
+
+          {/* Linked Spec */}
+          {task.spec_id && (
+            <div className="space-y-1.5 sm:col-span-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <FileText className="h-4 w-4" />
+                Spec
+              </div>
+              <Link
+                to="/specs/$specId"
+                params={{ specId: task.spec_id }}
+                className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+              >
+                View Spec
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
             </div>
           )}
 

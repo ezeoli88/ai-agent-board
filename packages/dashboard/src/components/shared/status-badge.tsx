@@ -34,6 +34,8 @@ const STATUS_CONFIG: Record<
   in_progress: { label: 'In Progress', variant: 'warning' },
   awaiting_review: { label: 'Awaiting Review', variant: 'purple' },
   pr_created: { label: 'PR Created', variant: 'indigo' },
+  canceled: { label: 'Canceled', variant: 'secondary' },
+  merge_conflicts: { label: 'Merge Conflicts', variant: 'orange' },
 }
 
 interface StatusBadgeProps {

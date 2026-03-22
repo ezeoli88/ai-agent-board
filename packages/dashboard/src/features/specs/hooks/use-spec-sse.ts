@@ -112,7 +112,7 @@ export function useSpecSSE({ specId, enabled = true }: UseSpecSSEOptions): UseSp
           try {
             const parsed = JSON.parse(event.data) as { status: string }
             // Spec is no longer running if status is terminal
-            if (['approved', 'failed', 'canceled'].includes(parsed.status)) {
+            if (['ready', 'failed', 'cancelled'].includes(parsed.status)) {
               setIsAgentRunning(false)
             }
             invalidateSpecQueries()

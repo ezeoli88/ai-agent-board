@@ -207,6 +207,14 @@ const STATUS_COLORS: Record<TaskStatus, { active: string; inactive: string }> = 
     active: 'bg-indigo-500 text-white hover:bg-indigo-600',
     inactive: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-800',
   },
+  canceled: {
+    active: 'bg-gray-500 text-white hover:bg-gray-600',
+    inactive: 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700',
+  },
+  merge_conflicts: {
+    active: 'bg-orange-500 text-white hover:bg-orange-600',
+    inactive: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900 dark:text-orange-300 dark:hover:bg-orange-800',
+  },
 }
 
 function StatusChip({ status, isActive, onClick, compact }: StatusChipProps) {

@@ -36,6 +36,7 @@ pub struct CreateTaskServiceInput {
     pub build_command: Option<String>,
     pub agent_type: Option<String>,
     pub agent_model: Option<String>,
+    pub spec_id: Option<String>,
 }
 
 /// Convert from the API model's CreateTaskInput to the service-level input.
@@ -52,6 +53,7 @@ impl From<crate::models::task::CreateTaskInput> for CreateTaskServiceInput {
             build_command: input.build_command,
             agent_type: input.agent_type,
             agent_model: input.agent_model,
+            spec_id: input.spec_id,
         }
     }
 }
@@ -65,7 +67,7 @@ const TASK_COLUMNS: &str = "\
     status, pr_url, error, created_at, updated_at, \
     repository_id, user_input, generated_spec, generated_spec_at, \
     final_spec, spec_approved_at, was_spec_edited, branch_name, pr_number, \
-    agent_type, agent_model, changes_data, conflict_files, base_commit";
+    agent_type, agent_model, changes_data, conflict_files, base_commit, spec_id";
 
 /// Whitelist of columns allowed in UPDATE operations (matches TS ALLOWED_UPDATE_COLUMNS).
 const ALLOWED_UPDATE_COLUMNS: &[&str] = &[
@@ -92,6 +94,7 @@ const ALLOWED_UPDATE_COLUMNS: &[&str] = &[
     "changes_data",
     "conflict_files",
     "base_commit",
+    "spec_id",
 ];
 
 // ============================================================================
@@ -153,6 +156,7 @@ pub fn row_to_task(row: &Row) -> Result<Task, rusqlite::Error> {
         changes_data: row.get(23)?,
         conflict_files: row.get(24)?,
         base_commit: row.get(25)?,
+        spec_id: row.get(26)?,
     })
 }
 
@@ -254,8 +258,8 @@ pub fn create_task(
             id, title, description, repo_url, target_branch, context_files, build_command,
             status, created_at, updated_at,
             repository_id, user_input, was_spec_edited,
-            agent_type, agent_model
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            agent_type, agent_model, spec_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         rusqlite::params![
             id,
             title,
@@ -272,6 +276,7 @@ pub fn create_task(
             0i32, // was_spec_edited defaults to false
             input.agent_type.as_deref(),
             input.agent_model.as_deref(),
+            input.spec_id.as_deref(),
         ],
     )
     .map_err(AppError::Database)?;
@@ -655,7 +660,9 @@ mod tests {
                 agent_type TEXT,
                 agent_model TEXT,
                 changes_data TEXT,
-                conflict_files TEXT
+                conflict_files TEXT,
+                base_commit TEXT,
+                spec_id TEXT
             );
             CREATE INDEX idx_tasks_status ON tasks(status);
             CREATE INDEX idx_tasks_created_at ON tasks(created_at);
@@ -990,6 +997,7 @@ mod tests {
             build_command: None,
             agent_type: None,
             agent_model: None,
+            spec_id: None,
         };
         let service_input: CreateTaskServiceInput = model_input.into();
         assert_eq!(service_input.repository_id, Some("repo-123".to_string()));

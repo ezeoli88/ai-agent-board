@@ -1,6 +1,6 @@
-//! Task event persistence service.
+//! Event persistence service.
 //!
-//! Provides functions to persist and retrieve SSE events from the `task_logs` table.
+//! Provides functions to persist and retrieve SSE events from the `event_logs` table.
 //! Events are stored with their full JSON payload in `event_data`, while `level`/`message`
 //! are populated for backward compatibility with the export format.
 
@@ -12,12 +12,13 @@ use crate::utils::{SSEEvent, SSEEventType};
 
 /// A single event to be persisted.
 pub struct PersistEvent {
-    pub task_id: String,
+    pub entity_id: String,
+    pub entity_type: String,
     pub event: SSEEvent,
     pub timestamp: String,
 }
 
-/// Batch-inserts events into the `task_logs` table.
+/// Batch-inserts events into the `event_logs` table.
 ///
 /// For `log` events, extracts `level` and `message` from the event data for
 /// backward compatibility. For all other event types, stores `level='info'`
@@ -29,8 +30,8 @@ pub fn insert_events(conn: &Connection, events: &[PersistEvent]) -> Result<(), A
 
     let mut stmt = conn
         .prepare_cached(
-            "INSERT INTO task_logs (id, task_id, timestamp, level, message, event_type, event_data)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO event_logs (id, entity_id, entity_type, timestamp, level, message, event_type, event_data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .map_err(AppError::Database)?;
 
@@ -56,37 +57,38 @@ pub fn insert_events(conn: &Connection, events: &[PersistEvent]) -> Result<(), A
 
         if let Err(e) = stmt.execute(rusqlite::params![
             id,
-            event.task_id,
+            event.entity_id,
+            event.entity_type,
             event.timestamp,
             level,
             message,
             event_type_str,
             event_data_json,
         ]) {
-            warn!(task_id = %event.task_id, error = %e, "Failed to persist SSE event");
+            warn!(entity_id = %event.entity_id, error = %e, "Failed to persist SSE event");
         }
     }
 
     Ok(())
 }
 
-/// Retrieves all persisted events for a task, ordered by insertion order (ROWID ASC).
+/// Retrieves all persisted events for an entity, ordered by insertion order (ROWID ASC).
 ///
 /// Handles two cases:
 /// - **New rows** (have `event_data`): deserialize from the stored JSON payload.
 /// - **Legacy rows** (no `event_data`): reconstruct a log SSEEvent from `level`/`message`.
-pub fn get_events_for_task(conn: &Connection, task_id: &str) -> Result<Vec<SSEEvent>, AppError> {
+pub fn get_events_for_entity(conn: &Connection, entity_id: &str) -> Result<Vec<SSEEvent>, AppError> {
     let mut stmt = conn
         .prepare_cached(
             "SELECT level, message, event_type, event_data, timestamp
-             FROM task_logs
-             WHERE task_id = ?1
+             FROM event_logs
+             WHERE entity_id = ?1
              ORDER BY ROWID ASC",
         )
         .map_err(AppError::Database)?;
 
     let rows = stmt
-        .query_map(rusqlite::params![task_id], |row| {
+        .query_map(rusqlite::params![entity_id], |row| {
             let level: String = row.get(0)?;
             let message: String = row.get(1)?;
             let event_type: Option<String> = row.get(2)?;

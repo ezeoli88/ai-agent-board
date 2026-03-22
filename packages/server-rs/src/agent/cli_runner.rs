@@ -267,7 +267,7 @@ impl CLIAgentRunner {
         let (feedback_tx, feedback_rx) = mpsc::channel(32);
 
         info!(
-            task_id = %options.task_id,
+            task_id = %options.entity_id,
             agent_type = %options.agent_type,
             cwd = %options.cwd.display(),
             "CLIAgentRunner initialized"
@@ -330,7 +330,7 @@ impl CLIAgentRunner {
     /// Cancels the agent execution.
     pub fn cancel(&self) {
         self.cancel_token.cancel();
-        info!(task_id = %self.options.task_id, "Agent cancellation requested");
+        info!(task_id = %self.options.entity_id, "Agent cancellation requested");
     }
 
     /// Returns whether the agent is currently running.
@@ -351,7 +351,7 @@ impl CLIAgentRunner {
         );
 
         info!(
-            task_id = %self.options.task_id,
+            task_id = %self.options.entity_id,
             command = %cli_command.command,
             args_count = cli_command.args.len(),
             prompt_length = self.options.prompt.len(),
@@ -424,7 +424,7 @@ impl CLIAgentRunner {
                 cmd.creation_flags(0x0800_0000_u32); // CREATE_NO_WINDOW
 
                 info!(
-                    task_id = %self.options.task_id,
+                    task_id = %self.options.entity_id,
                     "Using PowerShell workaround for Codex on Windows"
                 );
             }
@@ -512,7 +512,7 @@ impl CLIAgentRunner {
             Ok(c) => c,
             Err(e) => {
                 error!(
-                    task_id = %self.options.task_id,
+                    task_id = %self.options.entity_id,
                     error = %e,
                     "Failed to spawn CLI process"
                 );
@@ -528,7 +528,7 @@ impl CLIAgentRunner {
 
         let child_pid = child.id().unwrap_or(0);
         info!(
-            task_id = %self.options.task_id,
+            task_id = %self.options.entity_id,
             pid = child_pid,
             "CLI process spawned"
         );
@@ -540,7 +540,7 @@ impl CLIAgentRunner {
         let stdin_handle: Option<Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>> =
             if cli_command.use_stdin {
                 if let Some(mut stdin) = child.stdin.take() {
-                    let task_id_stdin = self.options.task_id.clone();
+                    let task_id_stdin = self.options.entity_id.clone();
 
                     // Write prompt followed by newline
                     if let Err(e) = stdin.write_all(self.options.prompt.as_bytes()).await {
@@ -577,7 +577,7 @@ impl CLIAgentRunner {
         let stderr = child.stderr.take();
 
         // Shared state
-        let task_id = self.options.task_id.clone();
+        let task_id = self.options.entity_id.clone();
         let agent_type = self.options.agent_type.clone();
         let output_buf = Arc::clone(&self.output);
         let cancel = self.cancel_token.clone();

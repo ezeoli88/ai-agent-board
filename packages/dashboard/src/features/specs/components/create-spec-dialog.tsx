@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from 'sonner'
+import type { CreateSpecInput } from '../types'
 import { useSpecUIStore } from '../stores/spec-ui-store'
 import { useCreateSpec } from '../hooks/use-spec-mutations'
 import { useRefineSpec } from '../hooks/use-spec-actions'
@@ -79,7 +80,7 @@ export function CreateSpecDialog() {
         repository_id: selectedRepoId,
         user_input: userInput.trim(),
         title: userInput.trim().slice(0, 100),
-        ...(agentType ? { agent_type: agentType } : {}),
+        ...(agentType ? { agent_type: agentType as CreateSpecInput['agent_type'] } : {}),
         ...(agentModel ? { agent_model: agentModel } : {}),
       })
 

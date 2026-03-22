@@ -3,23 +3,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   MessageSquare,
-  FileText,
-  Pencil,
-  Terminal,
-  FilePlus,
-  Search,
   Loader2,
-  Check,
-  X,
   Send,
   Keyboard,
   AlertCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
 import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { ChatMessageBubble, ToolBadge } from '@/components/shared/chat'
 import { taskKeys } from '../hooks/query-keys'
 import { useTaskChat } from '../hooks/use-task-chat'
 import type { ChatEntry } from '../hooks/use-task-chat'
@@ -32,94 +25,6 @@ interface TaskChatProps {
   task: Task
   readOnly?: boolean
   className?: string
-}
-
-// ============================================================================
-// Tool icon mapping
-// ============================================================================
-
-function getToolIcon(name: string) {
-  const lower = name.toLowerCase()
-  if (lower === 'read') return FileText
-  if (lower === 'edit') return Pencil
-  if (lower === 'bash') return Terminal
-  if (lower === 'write') return FilePlus
-  if (lower === 'grep' || lower === 'glob') return Search
-  return Terminal
-}
-
-// ============================================================================
-// ChatMessageBubble
-// ============================================================================
-
-function ChatMessageBubble({ message }: { message: ChatMessageEvent }) {
-  if (message.role === 'system') {
-    return (
-      <div className="flex justify-center py-1.5">
-        <span className="text-xs text-zinc-400 dark:text-zinc-500 italic">
-          {message.content}
-        </span>
-      </div>
-    )
-  }
-
-  if (message.role === 'user') {
-    return (
-      <div className="flex justify-end py-1.5">
-        <div className="max-w-[85%] rounded-lg px-3 py-2 bg-blue-600 dark:bg-blue-500 text-white dark:text-white">
-          <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
-        </div>
-      </div>
-    )
-  }
-
-  // assistant
-  return (
-    <div className="flex justify-start py-1.5">
-      <div className="max-w-[85%] rounded-lg px-3 py-2 bg-zinc-800 dark:bg-zinc-200 text-zinc-100 dark:text-zinc-900">
-        <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
-      </div>
-    </div>
-  )
-}
-
-// ============================================================================
-// ToolBadge
-// ============================================================================
-
-function ToolBadge({ activity }: { activity: ToolActivityEvent }) {
-  const Icon = getToolIcon(activity.name)
-  const displayName = activity.name || 'Tool'
-
-  // Clean up summary: remove long absolute paths, keep just the meaningful part
-  const cleanSummary = activity.summary
-    ? activity.summary
-        .replace(/^.*[/\\]worktrees[/\\][^/\\]+[/\\]/, '') // strip worktree prefix
-        .replace(/^.*[/\\](?=[^/\\]+$)/, '') // for single file, keep just filename
-    : ''
-
-  return (
-    <div className="flex items-center py-0.5">
-      <Badge
-        variant="secondary"
-        className="gap-1.5 px-2 py-0.5 text-xs font-normal bg-zinc-800 dark:bg-zinc-200 text-zinc-300 dark:text-zinc-600 border-0 max-w-full"
-      >
-        {activity.status === 'running' ? (
-          <Loader2 className="size-3 animate-spin text-blue-400 dark:text-blue-600 shrink-0" />
-        ) : activity.status === 'completed' ? (
-          <Check className="size-3 text-emerald-400 dark:text-emerald-600 shrink-0" />
-        ) : activity.status === 'error' ? (
-          <X className="size-3 text-red-400 dark:text-red-600 shrink-0" />
-        ) : (
-          <Icon className="size-3 shrink-0" />
-        )}
-        <span className="font-medium text-zinc-200 dark:text-zinc-700">{displayName}</span>
-        {cleanSummary && (
-          <span className="truncate max-w-[300px] text-zinc-400 dark:text-zinc-500">{cleanSummary}</span>
-        )}
-      </Badge>
-    </div>
-  )
 }
 
 // ============================================================================

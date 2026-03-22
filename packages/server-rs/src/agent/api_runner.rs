@@ -68,10 +68,10 @@ impl APIAgentRunner {
         api_key: &str,
         model: Option<String>,
         cwd: PathBuf,
-        task_id: String,
+        entity_id: String,
     ) -> Self {
         let options = APIRunnerOptions {
-            task_id,
+            entity_id,
             agent_type: crate::agent::types::AgentType::MiniMax,
             prompt: String::new(), // Set by caller
             model,
@@ -126,7 +126,7 @@ impl APIAgentRunner {
     }
 
     async fn run_inner(&mut self, sse: &Arc<SSEEmitter>) -> Result<AgentRunResult, AppError> {
-        let task_id = &self.options.task_id.clone();
+        let task_id = &self.options.entity_id.clone();
         let model = self
             .options
             .model

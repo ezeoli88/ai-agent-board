@@ -157,6 +157,8 @@ pub struct Task {
     pub conflict_files: Option<String>,
     /// Commit hash captured when agent execution starts, used as diff base.
     pub base_commit: Option<String>,
+    /// Link to the spec that generated this task.
+    pub spec_id: Option<String>,
 
     // -- Status and metadata --
     /// Current status of the task.
@@ -194,6 +196,7 @@ pub struct CreateTaskInput {
     pub build_command: Option<String>,
     pub agent_type: Option<String>,
     pub agent_model: Option<String>,
+    pub spec_id: Option<String>,
 }
 
 fn default_branch() -> Option<String> {

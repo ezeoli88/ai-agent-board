@@ -89,8 +89,8 @@ pub struct CLICommand {
 /// Options for constructing and running a CLI agent.
 #[derive(Debug, Clone)]
 pub struct CLIRunnerOptions {
-    /// The task ID this agent run is associated with.
-    pub task_id: String,
+    /// The entity ID (task or spec) this agent run is associated with.
+    pub entity_id: String,
     /// The type of CLI agent to spawn.
     pub agent_type: AgentType,
     /// The prompt text to send to the agent.
@@ -108,8 +108,8 @@ pub struct CLIRunnerOptions {
 /// Options for constructing and running an API-based agent (e.g., MiniMax).
 #[derive(Debug, Clone)]
 pub struct APIRunnerOptions {
-    /// The task ID this agent run is associated with.
-    pub task_id: String,
+    /// The entity ID (task or spec) this agent run is associated with.
+    pub entity_id: String,
     /// The type of API agent to run.
     pub agent_type: AgentType,
     /// The prompt text to send to the agent.
@@ -120,6 +120,31 @@ pub struct APIRunnerOptions {
     pub cwd: PathBuf,
     /// API key for the provider.
     pub api_key: String,
+}
+
+/// Identifies what entity an agent run is associated with.
+///
+/// Used by `AgentService` to dispatch completion logic (update task vs spec).
+#[derive(Debug, Clone)]
+pub enum AgentEntityContext {
+    Task { task_id: String },
+    Spec { spec_id: String },
+}
+
+impl AgentEntityContext {
+    pub fn entity_id(&self) -> &str {
+        match self {
+            Self::Task { task_id } => task_id,
+            Self::Spec { spec_id } => spec_id,
+        }
+    }
+
+    pub fn entity_type(&self) -> &str {
+        match self {
+            Self::Task { .. } => "task",
+            Self::Spec { .. } => "spec",
+        }
+    }
 }
 
 /// Auth/subscription error rule for detecting known failure patterns in stderr.

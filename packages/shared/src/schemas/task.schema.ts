@@ -96,6 +96,9 @@ export const TaskSchema = z.object({
   // Merge conflict data
   conflict_files: z.string().nullable().optional(),  // JSON array of conflicting file paths
 
+  // Spec traceability
+  spec_id: z.string().nullable().optional(),
+
   // Status and metadata
   status: TaskStatusSchema,
   error: z.string().nullable(),

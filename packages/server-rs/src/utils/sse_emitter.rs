@@ -66,7 +66,8 @@ pub struct SSEEvent {
 /// This struct is cheaply cloneable (inner state is behind `Arc<RwLock<_>>`).
 /// Message sent to the persistence background task.
 struct PersistMsg {
-    task_id: String,
+    entity_id: String,
+    entity_type: String,
     event: SSEEvent,
     timestamp: String,
 }
@@ -129,13 +130,18 @@ impl SSEEmitter {
     /// (e.g., user chat messages added by the frontend before calling the API).
     /// Broadcasting these would cause duplicate entries in the UI.
     pub async fn store_event(&self, task_id: &str, event: SSEEvent) {
+        self.store_event_for_entity(task_id, "task", event).await;
+    }
+
+    /// Stores an event in the history for replay on new SSE connections for any entity type.
+    pub async fn store_event_for_entity(&self, entity_id: &str, entity_type: &str, event: SSEEvent) {
         // Send to persistence channel
-        self.send_to_persist(task_id, &event);
+        self.send_to_persist(entity_id, entity_type, &event);
 
         let mut history = self.event_history.write().await;
-        let task_history = history.entry(task_id.to_string()).or_default();
-        if task_history.len() < MAX_HISTORY_PER_TASK {
-            task_history.push(event);
+        let entity_history = history.entry(entity_id.to_string()).or_default();
+        if entity_history.len() < MAX_HISTORY_PER_TASK {
+            entity_history.push(event);
         }
     }
 
@@ -155,25 +161,30 @@ impl SSEEmitter {
     /// If no channel exists for the task (i.e., nobody has subscribed),
     /// the event is silently dropped.
     pub async fn emit(&self, task_id: &str, event: SSEEvent) {
+        self.emit_for_entity(task_id, "task", event).await;
+    }
+
+    /// Emits an SSE event for any entity type (task or spec).
+    pub async fn emit_for_entity(&self, entity_id: &str, entity_type: &str, event: SSEEvent) {
         // Send to persistence channel
-        self.send_to_persist(task_id, &event);
+        self.send_to_persist(entity_id, entity_type, &event);
 
         // Store in history for replay on new connections
         {
             let mut history = self.event_history.write().await;
-            let task_history = history.entry(task_id.to_string()).or_default();
-            if task_history.len() < MAX_HISTORY_PER_TASK {
-                task_history.push(event.clone());
+            let entity_history = history.entry(entity_id.to_string()).or_default();
+            if entity_history.len() < MAX_HISTORY_PER_TASK {
+                entity_history.push(event.clone());
             }
         }
 
         // Broadcast to live subscribers
         let channels = self.channels.read().await;
-        if let Some(sender) = channels.get(task_id) {
+        if let Some(sender) = channels.get(entity_id) {
             let receiver_count = sender.receiver_count();
             if receiver_count == 0 {
                 debug!(
-                    task_id,
+                    entity_id,
                     event_type = %event.event_type.as_event_name(),
                     "SSE broadcast skipped: 0 receivers"
                 );
@@ -182,21 +193,21 @@ impl SSEEmitter {
             match sender.send(event) {
                 Ok(_) => {
                     debug!(
-                        task_id,
+                        entity_id,
                         event_type = ?&"emit",
                         receivers = receiver_count,
                         "SSE event broadcast"
                     );
                 }
                 Err(_) => {
-                    warn!(task_id, "SSE send failed: no active receivers");
+                    warn!(entity_id, "SSE send failed: no active receivers");
                 }
             }
         } else {
             debug!(
-                task_id,
+                entity_id,
                 event_type = %event.event_type.as_event_name(),
-                "SSE broadcast skipped: no channel exists for task"
+                "SSE broadcast skipped: no channel exists for entity"
             );
         }
     }
@@ -379,10 +390,11 @@ impl SSEEmitter {
     }
 
     /// Sends an event to the persistence background loop (if enabled).
-    fn send_to_persist(&self, task_id: &str, event: &SSEEvent) {
+    fn send_to_persist(&self, entity_id: &str, entity_type: &str, event: &SSEEvent) {
         if let Some(ref tx) = self.persist_tx {
             let _ = tx.send(PersistMsg {
-                task_id: task_id.to_string(),
+                entity_id: entity_id.to_string(),
+                entity_type: entity_type.to_string(),
                 event: event.clone(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
             });
@@ -409,7 +421,8 @@ async fn persist_loop(db: Database, mut rx: mpsc::UnboundedReceiver<PersistMsg>)
         match msg {
             Some(msg) => {
                 buffer.push(PersistEvent {
-                    task_id: msg.task_id,
+                    entity_id: msg.entity_id,
+                    entity_type: msg.entity_type,
                     event: msg.event,
                     timestamp: msg.timestamp,
                 });
@@ -421,7 +434,8 @@ async fn persist_loop(db: Database, mut rx: mpsc::UnboundedReceiver<PersistMsg>)
                     match timeout.await {
                         Ok(Some(msg)) => {
                             buffer.push(PersistEvent {
-                                task_id: msg.task_id,
+                                entity_id: msg.entity_id,
+                                entity_type: msg.entity_type,
                                 event: msg.event,
                                 timestamp: msg.timestamp,
                             });

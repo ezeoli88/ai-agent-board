@@ -84,10 +84,10 @@ function SpecDetailContent({ spec }: SpecDetailContentProps) {
   const repoName = repo?.name ?? spec.repository_id
 
   // Determine edit permissions based on status
-  const isTerminal = spec.status === 'approved' || spec.status === 'failed' || spec.status === 'canceled'
-  const isRefining = spec.status === 'refining'
-  const isTitleEditable = !isTerminal && !isRefining
-  const isContentEditable = !isTerminal && !isRefining
+  const isTerminal = spec.status === 'ready' || spec.status === 'failed' || spec.status === 'cancelled'
+  const isGenerating = spec.status === 'generating'
+  const isTitleEditable = !isTerminal && !isGenerating
+  const isContentEditable = !isTerminal && !isGenerating
 
   // The content to show: prefer final_spec (user-edited), fall back to draft_spec
   const specContent = spec.final_spec ?? spec.draft_spec
@@ -167,10 +167,10 @@ function SpecDetailContent({ spec }: SpecDetailContentProps) {
         <div className="flex items-center gap-3">
           <SpecStatusBadge status={spec.status} />
           <span className="text-sm text-muted-foreground">{repoName}</span>
-          {isRefining && (
+          {isGenerating && (
             <span className="inline-flex items-center gap-1.5 text-sm text-blue-500">
               <Loader2 className="size-3.5 animate-spin" />
-              Agent is refining...
+              Agent is generating...
             </span>
           )}
         </div>
@@ -194,7 +194,7 @@ function SpecDetailContent({ spec }: SpecDetailContentProps) {
               variant="outline"
               className="w-full justify-start"
               onClick={handleContinueRefining}
-              disabled={isRefining || refineSpec.isPending || approveSpec.isPending}
+              disabled={isGenerating || refineSpec.isPending || approveSpec.isPending}
             >
               {refineSpec.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -207,7 +207,7 @@ function SpecDetailContent({ spec }: SpecDetailContentProps) {
             <Button
               className="w-full justify-start"
               onClick={handleSendToCode}
-              disabled={!specContent || isRefining || approveSpec.isPending || refineSpec.isPending}
+              disabled={!specContent || isGenerating || approveSpec.isPending || refineSpec.isPending}
             >
               {approveSpec.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -228,7 +228,7 @@ function SpecDetailContent({ spec }: SpecDetailContentProps) {
       )}
 
       {/* Show approved info */}
-      {spec.status === 'approved' && spec.task_id && (
+      {spec.status === 'ready' && spec.task_id && (
         <Card>
           <CardContent className="py-4">
             <div className="flex items-center justify-between">

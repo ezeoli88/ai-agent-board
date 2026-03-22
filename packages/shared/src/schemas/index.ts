@@ -167,6 +167,19 @@ export {
   type LocalReposResponse,
 } from './repository.schema.js';
 
+// Spec schemas and types
+export {
+  SPEC_STATUSES,
+  SpecStatusSchema,
+  SpecSchema,
+  CreateSpecSchema,
+  UpdateSpecSchema,
+  type SpecStatus,
+  type Spec,
+  type CreateSpecInput,
+  type UpdateSpecInput,
+} from './spec.schema.js';
+
 // Agent schemas and types
 export {
   AgentTypeSchema,

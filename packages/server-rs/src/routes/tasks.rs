@@ -30,7 +30,7 @@ use tracing::{info, warn};
 
 use crate::agent::cli_prompts;
 use crate::agent::types::AgentType;
-use crate::agent::{APIRunnerOptions, CLIRunnerOptions};
+use crate::agent::{APIRunnerOptions, CLIRunnerOptions, AgentEntityContext};
 use crate::services::agent_service::RunnerOptions;
 use crate::error::AppError;
 use crate::models::task::{CreateTaskInput, TaskStatus, UpdateTaskInput};
@@ -1113,7 +1113,7 @@ async fn task_logs_stream(
         let db_events = state
             .db
             .call(move |conn| {
-                crate::services::task_event_service::get_events_for_task(conn, &task_id_for_db)
+                crate::services::task_event_service::get_events_for_entity(conn, &task_id_for_db)
             })
             .await
             .unwrap_or_default();
@@ -2169,7 +2169,7 @@ pub async fn start_agent_for_task(
             })?;
 
         RunnerOptions::API(APIRunnerOptions {
-            task_id: task_id.to_string(),
+            entity_id: task_id.to_string(),
             agent_type,
             prompt,
             model: task.agent_model.clone(),
@@ -2178,7 +2178,7 @@ pub async fn start_agent_for_task(
         })
     } else {
         RunnerOptions::CLI(CLIRunnerOptions {
-            task_id: task_id.to_string(),
+            entity_id: task_id.to_string(),
             agent_type,
             prompt,
             model: task.agent_model.clone(),
@@ -2190,7 +2190,7 @@ pub async fn start_agent_for_task(
 
     state
         .agent_service
-        .start_agent(task_id, runner_options)
+        .start_agent(AgentEntityContext::Task { task_id: task_id.to_string() }, runner_options)
         .await?;
 
     Ok(())
@@ -2241,7 +2241,7 @@ pub async fn resume_agent_for_task(
             })?;
 
         RunnerOptions::API(APIRunnerOptions {
-            task_id: task_id.to_string(),
+            entity_id: task_id.to_string(),
             agent_type,
             prompt,
             model: task.agent_model.clone(),
@@ -2250,7 +2250,7 @@ pub async fn resume_agent_for_task(
         })
     } else {
         RunnerOptions::CLI(CLIRunnerOptions {
-            task_id: task_id.to_string(),
+            entity_id: task_id.to_string(),
             agent_type,
             prompt,
             model: task.agent_model.clone(),
@@ -2262,7 +2262,7 @@ pub async fn resume_agent_for_task(
 
     state
         .agent_service
-        .start_agent(task_id, runner_options)
+        .start_agent(AgentEntityContext::Task { task_id: task_id.to_string() }, runner_options)
         .await?;
 
     Ok(())
