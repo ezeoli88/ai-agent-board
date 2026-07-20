@@ -77,12 +77,12 @@ pub fn router() -> Router<AppState> {
         .route("/local/scan", get(local_scan))
         .route("/local/add", post(local_add))
         // ---- Dynamic :id routes ----
-        .route("/{id}", get(get_repo).patch(update_repo).delete(delete_repo))
-        .route("/{id}/detect-stack", post(detect_stack))
         .route(
-            "/{id}/patterns",
-            post(add_pattern).delete(clear_patterns),
+            "/{id}",
+            get(get_repo).patch(update_repo).delete(delete_repo),
         )
+        .route("/{id}/detect-stack", post(detect_stack))
+        .route("/{id}/patterns", post(add_pattern).delete(clear_patterns))
         .route("/{id}/patterns/{pattern_id}", delete(delete_pattern))
 }
 
@@ -109,9 +109,7 @@ async fn list_repos(State(state): State<AppState>) -> Result<impl IntoResponse, 
                 .map_err(AppError::Database)?;
 
             let rows = stmt
-                .query_map([], |row| {
-                    Ok(row_to_repository(row))
-                })
+                .query_map([], |row| Ok(row_to_repository(row)))
                 .map_err(AppError::Database)?;
 
             let mut result = Vec::new();
@@ -263,9 +261,7 @@ async fn local_add(
     }
 
     let url = format!("file://{path}");
-    let default_branch = input
-        .default_branch
-        .unwrap_or_else(|| "main".to_string());
+    let default_branch = input.default_branch.unwrap_or_else(|| "main".to_string());
 
     info!(name = %name, path = %path, "POST /repos/local/add");
 
@@ -379,10 +375,7 @@ async fn update_repo(
             params.push(Box::new(now));
             params.push(Box::new(id.clone()));
 
-            let sql = format!(
-                "UPDATE repositories SET {} WHERE id = ?",
-                sets.join(", ")
-            );
+            let sql = format!("UPDATE repositories SET {} WHERE id = ?", sets.join(", "));
 
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params.iter().map(|p| p.as_ref()).collect();

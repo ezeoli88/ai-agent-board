@@ -27,10 +27,7 @@ pub fn definition() -> Value {
 }
 
 pub async fn execute(args: Value, cwd: &Path) -> ToolResult {
-    let command = args
-        .get("command")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
     if command.is_empty() {
         return ToolResult::err("Error: No command provided".into());
@@ -52,23 +49,20 @@ async fn run_command_with_platform_shell(
             match run_with_timeout(&git_bash, &["-lc", command], cwd).await {
                 Ok(output) => return Ok(output),
                 Err(e)
-                    if e.contains("cannot find the file specified")
-                        || e.contains("not found") => {}
+                    if e.contains("cannot find the file specified") || e.contains("not found") => {}
                 Err(e) => return Err(e),
             }
         }
 
         match run_with_timeout("powershell", &["-NoProfile", "-Command", command], cwd).await {
             Ok(output) => return Ok(output),
-            Err(e)
-                if e.contains("cannot find the file specified") || e.contains("not found") => {}
+            Err(e) if e.contains("cannot find the file specified") || e.contains("not found") => {}
             Err(e) => return Err(e),
         }
 
         match run_with_timeout("pwsh", &["-NoProfile", "-Command", command], cwd).await {
             Ok(output) => return Ok(output),
-            Err(e)
-                if e.contains("cannot find the file specified") || e.contains("not found") => {}
+            Err(e) if e.contains("cannot find the file specified") || e.contains("not found") => {}
             Err(e) => return Err(e),
         }
 

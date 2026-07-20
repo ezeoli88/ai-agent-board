@@ -35,14 +35,17 @@ async fn handle_json_output(parsed: &Value, raw_line: &str, emitter: &SSEEmitter
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            let tool_id = parsed
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let tool_id = parsed.get("id").and_then(Value::as_str).unwrap_or("");
             let input = parsed.get("input");
             let summary = extract_tool_summary(input);
 
-            emit_log(emitter, task_id, "info", &format!("Agent using tool: {tool_name}")).await;
+            emit_log(
+                emitter,
+                task_id,
+                "info",
+                &format!("Agent using tool: {tool_name}"),
+            )
+            .await;
             emit_tool_activity(emitter, task_id, tool_id, tool_name, &summary, "running").await;
         }
 
@@ -51,10 +54,7 @@ async fn handle_json_output(parsed: &Value, raw_line: &str, emitter: &SSEEmitter
                 .get("tool_use_id")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let content = parsed
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let content = parsed.get("content").and_then(Value::as_str).unwrap_or("");
             let is_error = parsed
                 .get("is_error")
                 .and_then(Value::as_bool)
@@ -65,27 +65,55 @@ async fn handle_json_output(parsed: &Value, raw_line: &str, emitter: &SSEEmitter
 
             emit_tool_activity(emitter, task_id, tool_use_id, "tool", summary, status).await;
             if !content.is_empty() {
-                emit_log(emitter, task_id, "info", &format!("Tool result: {}", truncate(content, 500))).await;
+                emit_log(
+                    emitter,
+                    task_id,
+                    "info",
+                    &format!("Tool result: {}", truncate(content, 500)),
+                )
+                .await;
             }
         }
 
         "message" => {
             if let Some(content) = parsed.get("content").and_then(Value::as_str) {
-                emit_log(emitter, task_id, "info", &format!("Agent: {}", truncate(content, 1000))).await;
+                emit_log(
+                    emitter,
+                    task_id,
+                    "info",
+                    &format!("Agent: {}", truncate(content, 1000)),
+                )
+                .await;
                 emit_chat_message(emitter, task_id, "assistant", content).await;
             }
         }
 
         "result" => {
             if let Some(result) = parsed.get("result").and_then(Value::as_str) {
-                emit_log(emitter, task_id, "info", &format!("Result: {}", truncate(result, 500))).await;
+                emit_log(
+                    emitter,
+                    task_id,
+                    "info",
+                    &format!("Result: {}", truncate(result, 500)),
+                )
+                .await;
             }
         }
 
         _ => {
             // Log unknown JSON events as raw output
-            debug!(task_id, "Unknown Copilot JSON event: {}", truncate(raw_line, 200));
-            emit_log(emitter, task_id, "info", &format!("CLI: {}", truncate(raw_line, 500))).await;
+            debug!(
+                task_id,
+                "Unknown Copilot JSON event: {}",
+                truncate(raw_line, 200)
+            );
+            emit_log(
+                emitter,
+                task_id,
+                "info",
+                &format!("CLI: {}", truncate(raw_line, 500)),
+            )
+            .await;
         }
     }
 }
@@ -110,7 +138,13 @@ async fn handle_text_output(line: &str, emitter: &SSEEmitter, task_id: &str) {
         if parts.len() == 2 {
             let tool_name = parts[0];
             let tool_arg = truncate(parts[1], 100);
-            emit_log(emitter, task_id, "info", &format!("Tool: {tool_name} {tool_arg}")).await;
+            emit_log(
+                emitter,
+                task_id,
+                "info",
+                &format!("Tool: {tool_name} {tool_arg}"),
+            )
+            .await;
             emit_tool_activity(emitter, task_id, "", tool_name, tool_arg, "running").await;
             return;
         }
@@ -120,7 +154,15 @@ async fn handle_text_output(line: &str, emitter: &SSEEmitter, task_id: &str) {
     // Pattern: "  + 1 line read" or unicode tree branch
     if let Some(rest) = strip_tree_prefix(trimmed) {
         emit_log(emitter, task_id, "info", &format!("Tool result: {rest}")).await;
-        emit_tool_activity(emitter, task_id, "", "tool", truncate(rest, 200), "completed").await;
+        emit_tool_activity(
+            emitter,
+            task_id,
+            "",
+            "tool",
+            truncate(rest, 200),
+            "completed",
+        )
+        .await;
         return;
     }
 
@@ -140,7 +182,13 @@ async fn handle_text_output(line: &str, emitter: &SSEEmitter, task_id: &str) {
         if parts.len() == 2 {
             let tool_name = parts[0];
             let tool_arg = truncate(parts[1], 100);
-            emit_log(emitter, task_id, "warn", &format!("Tool failed: {tool_name} {tool_arg}")).await;
+            emit_log(
+                emitter,
+                task_id,
+                "warn",
+                &format!("Tool failed: {tool_name} {tool_arg}"),
+            )
+            .await;
             emit_tool_activity(emitter, task_id, "", tool_name, tool_arg, "error").await;
             return;
         }
@@ -158,7 +206,13 @@ async fn handle_text_output(line: &str, emitter: &SSEEmitter, task_id: &str) {
             }
             if let Some(arg) = rest.strip_prefix(' ') {
                 let tool_arg = truncate(arg, 100);
-                emit_log(emitter, task_id, "info", &format!("Tool: {tool} {tool_arg}")).await;
+                emit_log(
+                    emitter,
+                    task_id,
+                    "info",
+                    &format!("Tool: {tool} {tool_arg}"),
+                )
+                .await;
                 emit_tool_activity(emitter, task_id, "", tool, tool_arg, "running").await;
                 return;
             }
@@ -191,14 +245,28 @@ async fn handle_text_output(line: &str, emitter: &SSEEmitter, task_id: &str) {
     }
 
     // Match confirmation prompts
-    if trimmed.contains("Press") && (trimmed.contains("Enter") || trimmed.contains('y') || trimmed.contains("return")) {
-        emit_log(emitter, task_id, "warn", &format!("CLI waiting for input: {trimmed}")).await;
+    if trimmed.contains("Press")
+        && (trimmed.contains("Enter") || trimmed.contains('y') || trimmed.contains("return"))
+    {
+        emit_log(
+            emitter,
+            task_id,
+            "warn",
+            &format!("CLI waiting for input: {trimmed}"),
+        )
+        .await;
         return;
     }
 
     // Match "would you like" prompts
     if trimmed.starts_with("?Would you like") || trimmed.starts_with("Would you like") {
-        emit_log(emitter, task_id, "warn", &format!("CLI waiting for input: {trimmed}")).await;
+        emit_log(
+            emitter,
+            task_id,
+            "warn",
+            &format!("CLI waiting for input: {trimmed}"),
+        )
+        .await;
         return;
     }
 

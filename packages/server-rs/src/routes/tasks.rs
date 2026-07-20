@@ -9,6 +9,7 @@
 
 use std::convert::Infallible;
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -31,11 +32,12 @@ use tracing::{info, warn};
 use crate::agent::cli_prompts;
 use crate::agent::types::AgentType;
 use crate::agent::{APIRunnerOptions, CLIRunnerOptions};
-use crate::services::agent_service::RunnerOptions;
 use crate::error::AppError;
+use crate::models::qa::{CreateQaRunInput, QaRun, QaRunStatus, UpdateQaRunInput};
 use crate::models::task::{CreateTaskInput, TaskStatus, UpdateTaskInput};
+use crate::services::agent_service::RunnerOptions;
 use crate::services::git_service::GitService;
-use crate::services::{repo_service, task_service};
+use crate::services::{qa_service, repo_service, settings_service, task_service};
 use crate::utils::{SSEEvent, SSEEventType};
 use crate::AppState;
 
@@ -66,6 +68,12 @@ struct FeedbackBody {
     message: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct QaBoardItem {
+    task: crate::models::task::Task,
+    latest_run: Option<QaRun>,
+}
+
 // ============================================================================
 // Router
 // ============================================================================
@@ -78,6 +86,8 @@ pub fn router() -> Router<AppState> {
         // CRUD
         .route("/", post(create_task))
         .route("/", get(list_tasks))
+        .route("/qa-board/items", get(list_qa_board))
+        .route("/qa-runs/{run_id}", get(get_qa_run))
         .route("/{id}", get(get_task))
         .route("/{id}", patch(update_task))
         .route("/{id}", delete(delete_task))
@@ -90,6 +100,7 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/approve-plan", post(approve_plan_stub))
         .route("/{id}/logs", get(task_logs_stream))
         .route("/{id}/changes", get(get_changes))
+        .route("/{id}/qa-runs", get(list_qa_runs).post(start_qa_run))
         .route("/{id}/pr-merged", post(pr_merged))
         .route("/{id}/pr-closed", post(pr_closed))
         .route("/{id}/start", post(start_task))
@@ -145,15 +156,40 @@ async fn list_tasks(
     let tasks = state
         .db
         .call(move |conn| {
-            task_service::get_all_tasks(
-                conn,
-                repo_url.as_deref(),
-                repository_id.as_deref(),
-            )
+            task_service::get_all_tasks(conn, repo_url.as_deref(), repository_id.as_deref())
         })
         .await?;
 
     Ok(Json(tasks))
+}
+
+/// GET /api/tasks/qa-board - List tasks with their latest QA run.
+async fn list_qa_board(
+    State(state): State<AppState>,
+    Query(query): Query<ListTasksQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let repo_url = query.repo_url.clone();
+    let repository_id = query.repository_id.clone();
+
+    let items = state
+        .db
+        .call(move |conn| {
+            let tasks =
+                task_service::get_all_tasks(conn, repo_url.as_deref(), repository_id.as_deref())?;
+            let mut items = Vec::with_capacity(tasks.len());
+
+            for task in tasks {
+                let latest_run = qa_service::list_qa_runs_for_task(conn, &task.id)?
+                    .into_iter()
+                    .next();
+                items.push(QaBoardItem { task, latest_run });
+            }
+
+            Ok::<_, AppError>(items)
+        })
+        .await?;
+
+    Ok(Json(items))
 }
 
 /// GET /api/tasks/:id - Get a single task by ID.
@@ -183,9 +219,7 @@ async fn update_task(
         .call(move |conn| task_service::update_task(conn, &task_id, &input))
         .await?;
 
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
     Ok(Json(task))
 }
@@ -238,19 +272,10 @@ async fn delete_task(
 
                 if let Some(workspace_path) = workspace {
                     // Discard uncommitted changes
-                    let _ = GitService::exec_git(
-                        &["checkout", "--", "."],
-                        &workspace_path,
-                        None,
-                    )
-                    .await;
+                    let _ =
+                        GitService::exec_git(&["checkout", "--", "."], &workspace_path, None).await;
                     // Remove untracked files
-                    let _ = GitService::exec_git(
-                        &["clean", "-fd"],
-                        &workspace_path,
-                        None,
-                    )
-                    .await;
+                    let _ = GitService::exec_git(&["clean", "-fd"], &workspace_path, None).await;
                     info!(task_id = %task_id, "Workspace changes reverted");
                 }
             }
@@ -264,9 +289,7 @@ async fn delete_task(
         .call(move |conn| task_service::delete_task(conn, &task_id))
         .await?;
 
-    state
-        .data_emitter
-        .emit_change("task", "deleted", Some(&id));
+    state.data_emitter.emit_change("task", "deleted", Some(&id));
 
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -373,9 +396,7 @@ async fn execute_task(
         }
     });
 
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
     Ok(Json(json!({
         "status": "started",
@@ -422,9 +443,7 @@ async fn send_feedback(
         // Store user message in history for replay (don't broadcast)
         state.sse_emitter.store_event(&id, user_chat_event).await;
 
-        state
-            .data_emitter
-            .emit_change("task", "updated", Some(&id));
+        state.data_emitter.emit_change("task", "updated", Some(&id));
 
         return Ok(Json(json!({ "status": "feedback_sent" })));
     }
@@ -503,9 +522,7 @@ async fn send_feedback(
         }
     });
 
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
     Ok(Json(json!({
         "status": "agent_resumed",
@@ -538,13 +555,14 @@ async fn cancel_task(
     let _ = state.agent_service.cancel_agent(&id).await;
 
     // Emit SSE events
-    state.sse_emitter.emit_error(&id, "Task canceled by user").await;
+    state
+        .sse_emitter
+        .emit_error(&id, "Task canceled by user")
+        .await;
     state.sse_emitter.emit_status(&id, "canceled").await;
 
     // Emit data-change
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
     Ok(Json(json!({ "status": "canceled" })))
 }
@@ -612,10 +630,7 @@ pub async fn push_and_create_pr(
             .await?;
         match repo {
             Some(r) => repo_service::get_repo_local_path(&r).ok_or_else(|| {
-                AppError::Validation(format!(
-                    "Repository path not found for repo: {}",
-                    r.url
-                ))
+                AppError::Validation(format!("Repository path not found for repo: {}", r.url))
             })?,
             None => {
                 revert_to_awaiting_review(&state, &id, "Repository not found").await;
@@ -652,9 +667,7 @@ pub async fn push_and_create_pr(
             .emit_complete(&id, Some(&pr_url), Some("PR already exists"))
             .await;
         state.sse_emitter.emit_status(&id, "pr_created").await;
-        state
-            .data_emitter
-            .emit_change("task", "updated", Some(&id));
+        state.data_emitter.emit_change("task", "updated", Some(&id));
         return Ok(Json(json!({ "status": "approved", "pr_url": pr_url })));
     }
 
@@ -700,7 +713,12 @@ pub async fn push_and_create_pr(
     // 4. Fetch & merge target branch
     state
         .sse_emitter
-        .emit_log(&id, "info", &format!("Fetching latest changes from {target_branch}..."), None)
+        .emit_log(
+            &id,
+            "info",
+            &format!("Fetching latest changes from {target_branch}..."),
+            None,
+        )
         .await;
 
     if let Err(e) = state
@@ -711,18 +729,19 @@ pub async fn push_and_create_pr(
         warn!(id = %id, error = %e, "Fetch failed, continuing without update");
         state
             .sse_emitter
-            .emit_log(&id, "warn", &format!("Could not fetch {target_branch}: {e}"), None)
+            .emit_log(
+                &id,
+                "warn",
+                &format!("Could not fetch {target_branch}: {e}"),
+                None,
+            )
             .await;
     }
 
     // Merge
     let merge_ref = format!("origin/{target_branch}");
-    let merge_result = GitService::exec_git(
-        &["merge", &merge_ref, "--no-edit"],
-        &workspace_path,
-        None,
-    )
-    .await;
+    let merge_result =
+        GitService::exec_git(&["merge", &merge_ref, "--no-edit"], &workspace_path, None).await;
 
     if let Ok(ref r) = merge_result {
         if r.exit_code != 0 {
@@ -757,10 +776,7 @@ pub async fn push_and_create_pr(
                         )
                     })
                     .await?;
-                state
-                    .sse_emitter
-                    .emit_status(&id, "merge_conflicts")
-                    .await;
+                state.sse_emitter.emit_status(&id, "merge_conflicts").await;
                 state
                     .sse_emitter
                     .emit_error(
@@ -771,9 +787,7 @@ pub async fn push_and_create_pr(
                         ),
                     )
                     .await;
-                state
-                    .data_emitter
-                    .emit_change("task", "updated", Some(&id));
+                state.data_emitter.emit_change("task", "updated", Some(&id));
                 return Ok(Json(json!({
                     "status": "merge_conflicts",
                     "conflict_files": conflict_files,
@@ -788,11 +802,7 @@ pub async fn push_and_create_pr(
     }
 
     // 5. Get branch name
-    let branch_name = match state
-        .git_service
-        .get_current_branch(&workspace_path)
-        .await
-    {
+    let branch_name = match state.git_service.get_current_branch(&workspace_path).await {
         Ok(b) => b,
         Err(e) => {
             let err_msg = format!("Failed to get branch name: {e}");
@@ -845,9 +855,7 @@ pub async fn push_and_create_pr(
             .emit_complete(&id, Some(&pr_url), Some("Changes pushed to existing PR"))
             .await;
         state.sse_emitter.emit_status(&id, "pr_created").await;
-        state
-            .data_emitter
-            .emit_change("task", "updated", Some(&id));
+        state.data_emitter.emit_change("task", "updated", Some(&id));
         return Ok(Json(json!({ "status": "approved", "pr_url": pr_url })));
     }
 
@@ -857,8 +865,7 @@ pub async fn push_and_create_pr(
         .get_remote_url(&workspace_path)
         .await
         .unwrap_or_else(|| task.repo_url.clone());
-    let pr_repo_url =
-        crate::services::gitlab_service::strip_credentials_from_url(&raw_remote_url);
+    let pr_repo_url = crate::services::gitlab_service::strip_credentials_from_url(&raw_remote_url);
 
     // 8. Build PR body
     let changed_files = state
@@ -868,7 +875,12 @@ pub async fn push_and_create_pr(
         .unwrap_or_default();
     let files_description: String = changed_files
         .iter()
-        .map(|f| format!("- {} ({:?}: +{}/-{})", f.path, f.status, f.additions, f.deletions))
+        .map(|f| {
+            format!(
+                "- {} ({:?}: +{}/-{})",
+                f.path, f.status, f.additions, f.deletions
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -995,9 +1007,7 @@ pub async fn push_and_create_pr(
                 )
                 .await;
             state.sse_emitter.emit_status(&id, "pr_created").await;
-            state
-                .data_emitter
-                .emit_change("task", "updated", Some(&id));
+            state.data_emitter.emit_change("task", "updated", Some(&id));
 
             Ok(Json(json!({ "status": "approved", "pr_url": pr_url })))
         }
@@ -1027,10 +1037,7 @@ async fn revert_to_awaiting_review(state: &AppState, task_id: &str, error_msg: &
             )
         })
         .await;
-    state
-        .sse_emitter
-        .emit_error(task_id, error_msg)
-        .await;
+    state.sse_emitter.emit_error(task_id, error_msg).await;
     state
         .sse_emitter
         .emit_status(task_id, "awaiting_review")
@@ -1065,9 +1072,7 @@ async fn request_changes(
         .call(move |conn| task_service::update_task(conn, &task_id, &update))
         .await?;
 
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
     Ok(Json(json!({
         "status": "changes_requested",
@@ -1194,8 +1199,8 @@ async fn task_logs_stream(
                 }
                 Some("failed") | Some("canceled") => {
                     let msg = task.error.as_deref().unwrap_or("Task failed");
-                    let data = serde_json::to_string(&json!({ "message": msg }))
-                        .unwrap_or_default();
+                    let data =
+                        serde_json::to_string(&json!({ "message": msg })).unwrap_or_default();
                     replay_events.push(Ok(Event::default().event("error").data(data)));
                 }
                 _ => {}
@@ -1323,15 +1328,27 @@ async fn get_changes(
                         if r.exit_code == 0 {
                             Some(bc.clone())
                         } else {
-                            let tb = if task.target_branch.is_empty() { None } else { Some(task.target_branch.as_str()) };
+                            let tb = if task.target_branch.is_empty() {
+                                None
+                            } else {
+                                Some(task.target_branch.as_str())
+                            };
                             resolve_workspace_base(&local_path, tb).await
                         }
                     } else {
-                        let tb = if task.target_branch.is_empty() { None } else { Some(task.target_branch.as_str()) };
+                        let tb = if task.target_branch.is_empty() {
+                            None
+                        } else {
+                            Some(task.target_branch.as_str())
+                        };
                         resolve_workspace_base(&local_path, tb).await
                     }
                 } else {
-                    let tb = if task.target_branch.is_empty() { None } else { Some(task.target_branch.as_str()) };
+                    let tb = if task.target_branch.is_empty() {
+                        None
+                    } else {
+                        Some(task.target_branch.as_str())
+                    };
                     resolve_workspace_base(&local_path, tb).await
                 };
                 let diff = get_workspace_diff_text(&local_path, base_ref.as_deref()).await;
@@ -1352,6 +1369,291 @@ async fn get_changes(
     Ok(Json(json!({ "files": [], "diff": "" })).into_response())
 }
 
+async fn list_qa_runs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let task_id = id.clone();
+    state
+        .db
+        .call(move |conn| task_service::get_task_by_id(conn, &task_id))
+        .await?;
+
+    let task_id = id.clone();
+    let runs = state
+        .db
+        .call(move |conn| qa_service::list_qa_runs_for_task(conn, &task_id))
+        .await?;
+
+    Ok(Json(runs))
+}
+
+async fn get_qa_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let run = state
+        .db
+        .call(move |conn| qa_service::get_qa_run_by_id(conn, &run_id))
+        .await?;
+
+    Ok(Json(run))
+}
+
+async fn start_qa_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<CreateQaRunInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let task_id = id.clone();
+    let task = state
+        .db
+        .call(move |conn| task_service::get_task_by_id(conn, &task_id))
+        .await?;
+
+    let command = validate_qa_command(input.test_command.as_deref())?;
+    let target_url = input
+        .target_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let workspace_path = resolve_qa_workspace(&state, &task).await?;
+    let (chrome_mcp_enabled, chrome_mcp_url) = state
+        .db
+        .call(|conn| settings_service::get_chrome_mcp_config(conn))
+        .await?;
+    let chrome_mcp_url = if chrome_mcp_enabled {
+        Some(
+            chrome_mcp_url
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty())
+                .ok_or_else(|| {
+                    AppError::Validation(
+                        "Chrome MCP is enabled but no URL is configured".to_string(),
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let task_id = id.clone();
+    let command_for_db = command.clone();
+    let target_url_for_db = target_url.clone();
+    let run = state
+        .db
+        .call(move |conn| {
+            qa_service::create_qa_run(
+                conn,
+                &task_id,
+                &command_for_db,
+                target_url_for_db.as_deref(),
+            )
+        })
+        .await?;
+
+    state
+        .data_emitter
+        .emit_change("qa_run", "created", Some(&run.id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
+
+    let db = state.db.clone();
+    let data_emitter = Arc::clone(&state.data_emitter);
+    let run_id = run.id.clone();
+    let task_id_for_emit = id.clone();
+    tokio::spawn(async move {
+        let result = execute_qa_command(
+            &command,
+            &workspace_path,
+            target_url.as_deref(),
+            chrome_mcp_url.as_deref(),
+        )
+        .await;
+        let status = if result.exit_code == Some(0) {
+            QaRunStatus::Passed
+        } else {
+            QaRunStatus::Failed
+        };
+        let completed_at = chrono::Utc::now().to_rfc3339();
+        let report_path = discover_qa_artifact(&workspace_path, "playwright-report");
+        let trace_path = discover_qa_artifact(&workspace_path, "test-results");
+        let run_id_for_db = run_id.clone();
+        let _ = db
+            .call(move |conn| {
+                qa_service::update_qa_run(
+                    conn,
+                    &run_id_for_db,
+                    &UpdateQaRunInput {
+                        status: Some(status),
+                        report_path: Some(report_path),
+                        trace_path: Some(trace_path),
+                        stdout: Some(result.stdout),
+                        stderr: Some(result.stderr),
+                        exit_code: Some(result.exit_code),
+                        completed_at: Some(Some(completed_at)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .await;
+        data_emitter.emit_change("qa_run", "updated", Some(&run_id));
+        data_emitter.emit_change("task", "updated", Some(&task_id_for_emit));
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(run)))
+}
+
+async fn resolve_qa_workspace(
+    state: &AppState,
+    task: &crate::models::task::Task,
+) -> Result<std::path::PathBuf, AppError> {
+    if let Some(worktree_path) = state.git_service.get_worktree_path(&task.id).await {
+        return Ok(worktree_path);
+    }
+
+    let repo_id = task.repository_id.as_ref().ok_or_else(|| {
+        AppError::Validation("Task has no repository_id for QA execution".to_string())
+    })?;
+    let repo_id = repo_id.clone();
+    let repo = state
+        .db
+        .call(move |conn| repo_service::get_repository_by_id(conn, &repo_id))
+        .await?
+        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
+
+    if let Some(local_path) = repo_service::get_repo_local_path(&repo) {
+        return Ok(local_path);
+    }
+
+    let worktree_result = state
+        .git_service
+        .setup_worktree(&task.id, &repo.url, &task.target_branch)
+        .await?;
+    Ok(worktree_result.worktree_path)
+}
+
+fn validate_qa_command(command: Option<&str>) -> Result<String, AppError> {
+    let command = command
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("npx playwright test --trace on --reporter=line");
+
+    if command.len() > 300 {
+        return Err(AppError::Validation(
+            "QA command must be 300 characters or less".to_string(),
+        ));
+    }
+
+    if command
+        .chars()
+        .any(|ch| matches!(ch, ';' | '&' | '|' | '>' | '<' | '`'))
+    {
+        return Err(AppError::Validation(
+            "QA command cannot include shell control characters".to_string(),
+        ));
+    }
+
+    let lower = command.to_ascii_lowercase();
+    let allowed = lower.starts_with("npx playwright test")
+        || lower.starts_with("npm exec playwright test")
+        || lower.starts_with("pnpm playwright test")
+        || lower.starts_with("yarn playwright test")
+        || lower == "npm run test:e2e"
+        || lower.starts_with("npm run test:e2e --")
+        || lower == "pnpm test:e2e"
+        || lower.starts_with("pnpm test:e2e --")
+        || lower == "yarn test:e2e"
+        || lower.starts_with("yarn test:e2e --");
+
+    if !allowed {
+        return Err(AppError::Validation(
+            "QA command must be a Playwright or test:e2e command".to_string(),
+        ));
+    }
+
+    Ok(command.to_string())
+}
+
+struct QaCommandResult {
+    stdout: Option<String>,
+    stderr: Option<String>,
+    exit_code: Option<i64>,
+}
+
+async fn execute_qa_command(
+    command: &str,
+    workspace_path: &std::path::Path,
+    target_url: Option<&str>,
+    chrome_mcp_url: Option<&str>,
+) -> QaCommandResult {
+    let mut cmd = if cfg!(windows) {
+        let mut command_builder = tokio::process::Command::new("cmd");
+        command_builder.args(["/C", command]);
+        command_builder
+    } else {
+        let mut command_builder = tokio::process::Command::new("sh");
+        command_builder.args(["-lc", command]);
+        command_builder
+    };
+    cmd.current_dir(workspace_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(target_url) = target_url {
+        cmd.env("PLAYWRIGHT_TEST_BASE_URL", target_url);
+        cmd.env("BASE_URL", target_url);
+    }
+
+    if let Some(chrome_mcp_url) = chrome_mcp_url {
+        cmd.env("CHROME_MCP_URL", chrome_mcp_url);
+        cmd.env("MCP_CHROME_URL", chrome_mcp_url);
+    }
+
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match tokio::time::timeout(Duration::from_secs(10 * 60), cmd.output()).await {
+        Ok(Ok(output)) => QaCommandResult {
+            stdout: Some(truncate_qa_output(&String::from_utf8_lossy(&output.stdout))),
+            stderr: Some(truncate_qa_output(&String::from_utf8_lossy(&output.stderr))),
+            exit_code: Some(output.status.code().unwrap_or(1) as i64),
+        },
+        Ok(Err(e)) => QaCommandResult {
+            stdout: None,
+            stderr: Some(format!("Failed to execute QA command: {e}")),
+            exit_code: Some(1),
+        },
+        Err(_) => QaCommandResult {
+            stdout: None,
+            stderr: Some("QA command timed out after 10 minutes".to_string()),
+            exit_code: Some(124),
+        },
+    }
+}
+
+fn truncate_qa_output(value: &str) -> String {
+    const MAX_CHARS: usize = 120_000;
+    if value.chars().count() <= MAX_CHARS {
+        value.to_string()
+    } else {
+        let mut truncated = value.chars().take(MAX_CHARS).collect::<String>();
+        truncated.push_str("\n[output truncated]");
+        truncated
+    }
+}
+
+fn discover_qa_artifact(workspace_path: &std::path::Path, folder: &str) -> Option<String> {
+    if workspace_path.join(folder).exists() {
+        Some(folder.to_string())
+    } else {
+        None
+    }
+}
+
 /// Resolves the best base ref for diffing in a workspace.
 async fn resolve_workspace_base(
     workspace_path: &std::path::Path,
@@ -1359,19 +1661,29 @@ async fn resolve_workspace_base(
 ) -> Option<String> {
     if let Some(branch) = target_branch {
         let remote_ref = format!("origin/{branch}");
-        if let Ok(r) = GitService::exec_git(&["rev-parse", "--verify", &remote_ref], workspace_path, None).await {
+        if let Ok(r) = GitService::exec_git(
+            &["rev-parse", "--verify", &remote_ref],
+            workspace_path,
+            None,
+        )
+        .await
+        {
             if r.exit_code == 0 {
                 return Some(remote_ref);
             }
         }
-        if let Ok(r) = GitService::exec_git(&["rev-parse", "--verify", branch], workspace_path, None).await {
+        if let Ok(r) =
+            GitService::exec_git(&["rev-parse", "--verify", branch], workspace_path, None).await
+        {
             if r.exit_code == 0 {
                 return Some(branch.to_string());
             }
         }
     }
     for candidate in &["origin/main", "origin/master", "main", "master"] {
-        if let Ok(r) = GitService::exec_git(&["rev-parse", "--verify", candidate], workspace_path, None).await {
+        if let Ok(r) =
+            GitService::exec_git(&["rev-parse", "--verify", candidate], workspace_path, None).await
+        {
             if r.exit_code == 0 {
                 return Some(candidate.to_string());
             }
@@ -1381,7 +1693,10 @@ async fn resolve_workspace_base(
 }
 
 /// Gets the full diff text from a workspace.
-async fn get_workspace_diff_text(workspace_path: &std::path::Path, base_ref: Option<&str>) -> String {
+async fn get_workspace_diff_text(
+    workspace_path: &std::path::Path,
+    base_ref: Option<&str>,
+) -> String {
     let mut diff = String::new();
     if let Some(base) = base_ref {
         if let Ok(r) = GitService::exec_git(&["diff", base, "HEAD"], workspace_path, None).await {
@@ -1407,8 +1722,12 @@ async fn get_workspace_diff_text(workspace_path: &std::path::Path, base_ref: Opt
 }
 
 /// Gets the list of changed files with status, line counts, and content.
-async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref: Option<&str>) -> Vec<serde_json::Value> {
-    let mut file_statuses: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+async fn get_workspace_changed_files(
+    workspace_path: &std::path::Path,
+    base_ref: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let mut file_statuses: std::collections::HashMap<String, &str> =
+        std::collections::HashMap::new();
 
     // Committed changes via name-status
     let diff_args: Vec<&str> = if let Some(base) = base_ref {
@@ -1422,7 +1741,11 @@ async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref:
             for line in r.stdout.lines().filter(|l| !l.is_empty()) {
                 let parts: Vec<&str> = line.splitn(2, '\t').collect();
                 if parts.len() >= 2 {
-                    let status = match parts[0] { "A" => "added", "D" => "deleted", _ => "modified" };
+                    let status = match parts[0] {
+                        "A" => "added",
+                        "D" => "deleted",
+                        _ => "modified",
+                    };
                     file_statuses.insert(parts[1].to_string(), status);
                 }
             }
@@ -1443,7 +1766,9 @@ async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref:
                     continue;
                 };
                 let file_path = file_path.trim().to_string();
-                if file_path.is_empty() { continue; }
+                if file_path.is_empty() {
+                    continue;
+                }
 
                 let status = if line.contains("??") || line.contains('A') {
                     "added"
@@ -1481,7 +1806,13 @@ async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref:
 
         // Fallback: uncommitted numstat
         if additions == 0 && deletions == 0 && *status != "deleted" {
-            if let Ok(r) = GitService::exec_git(&["diff", "--numstat", "--", file_path], workspace_path, None).await {
+            if let Ok(r) = GitService::exec_git(
+                &["diff", "--numstat", "--", file_path],
+                workspace_path,
+                None,
+            )
+            .await
+            {
                 if r.exit_code == 0 && !r.stdout.is_empty() {
                     let parts: Vec<&str> = r.stdout.split('\t').collect();
                     if parts.len() >= 2 {
@@ -1503,7 +1834,9 @@ async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref:
         match *status {
             "added" => {
                 file_json["oldContent"] = json!("");
-                if let Some(content) = read_file_content(workspace_path, file_path, max_content_size).await {
+                if let Some(content) =
+                    read_file_content(workspace_path, file_path, max_content_size).await
+                {
                     if additions == 0 {
                         additions = content.lines().count() as i64;
                         file_json["additions"] = json!(additions);
@@ -1513,7 +1846,9 @@ async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref:
             }
             "deleted" => {
                 if let Some(base) = base_ref {
-                    if let Some(content) = read_file_at_ref(workspace_path, file_path, base, max_content_size).await {
+                    if let Some(content) =
+                        read_file_at_ref(workspace_path, file_path, base, max_content_size).await
+                    {
                         file_json["oldContent"] = json!(content);
                     }
                 }
@@ -1521,13 +1856,17 @@ async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref:
             }
             "modified" => {
                 if let Some(base) = base_ref {
-                    if let Some(content) = read_file_at_ref(workspace_path, file_path, base, max_content_size).await {
+                    if let Some(content) =
+                        read_file_at_ref(workspace_path, file_path, base, max_content_size).await
+                    {
                         file_json["oldContent"] = json!(content);
                     }
                 } else {
                     file_json["oldContent"] = json!("");
                 }
-                if let Some(content) = read_file_content(workspace_path, file_path, max_content_size).await {
+                if let Some(content) =
+                    read_file_content(workspace_path, file_path, max_content_size).await
+                {
                     file_json["newContent"] = json!(content);
                 }
             }
@@ -1540,7 +1879,11 @@ async fn get_workspace_changed_files(workspace_path: &std::path::Path, base_ref:
 }
 
 /// Reads a file from the workspace directory.
-async fn read_file_content(workspace_path: &std::path::Path, file_path: &str, max_size: usize) -> Option<String> {
+async fn read_file_content(
+    workspace_path: &std::path::Path,
+    file_path: &str,
+    max_size: usize,
+) -> Option<String> {
     let full_path = workspace_path.join(file_path);
     match tokio::fs::read_to_string(&full_path).await {
         Ok(content) if content.len() <= max_size => Some(content),
@@ -1549,7 +1892,12 @@ async fn read_file_content(workspace_path: &std::path::Path, file_path: &str, ma
 }
 
 /// Reads a file at a specific git ref.
-async fn read_file_at_ref(workspace_path: &std::path::Path, file_path: &str, git_ref: &str, max_size: usize) -> Option<String> {
+async fn read_file_at_ref(
+    workspace_path: &std::path::Path,
+    file_path: &str,
+    git_ref: &str,
+    max_size: usize,
+) -> Option<String> {
     let spec = format!("{git_ref}:{file_path}");
     match GitService::exec_git(&["show", &spec], workspace_path, None).await {
         Ok(r) if r.exit_code == 0 && r.stdout.len() <= max_size => Some(r.stdout),
@@ -1575,9 +1923,7 @@ async fn pr_merged(
         .call(move |conn| task_service::update_task(conn, &task_id, &update))
         .await?;
 
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
     Ok(Json(json!({
         "status": "done",
@@ -1603,9 +1949,7 @@ async fn pr_closed(
         .call(move |conn| task_service::update_task(conn, &task_id, &update))
         .await?;
 
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
     Ok(Json(json!({
         "status": "canceled",
@@ -1712,11 +2056,11 @@ async fn start_task(
         }
     });
 
-    state
-        .data_emitter
-        .emit_change("task", "updated", Some(&id));
+    state.data_emitter.emit_change("task", "updated", Some(&id));
 
-    Ok(Json(json!({ "status": "started", "message": "Agent started" })))
+    Ok(Json(
+        json!({ "status": "started", "message": "Agent started" }),
+    ))
 }
 
 /// POST /api/tasks/:id/extend - STUB (Agent System, Phase 4).
@@ -1809,7 +2153,10 @@ async fn open_editor(
         }
     }
 
-    Ok((StatusCode::OK, Json(json!({ "opened": true, "path": path_str }))))
+    Ok((
+        StatusCode::OK,
+        Json(json!({ "opened": true, "path": path_str })),
+    ))
 }
 
 /// POST /api/tasks/:id/resolve-conflicts - Mark conflicts as resolved and create PR.
@@ -1838,9 +2185,11 @@ async fn resolve_conflicts(
     }
 
     // 2. Get worktree path
-    let worktree_path = state.git_service.get_worktree_path(&id).await.ok_or_else(|| {
-        AppError::Validation("No worktree found for this task.".to_string())
-    })?;
+    let worktree_path = state
+        .git_service
+        .get_worktree_path(&id)
+        .await
+        .ok_or_else(|| AppError::Validation("No worktree found for this task.".to_string()))?;
 
     // 3. Parse conflict files from task, or detect via git
     let mut conflict_file_list: Vec<String> = task
@@ -1875,9 +2224,7 @@ async fn resolve_conflicts(
     }
 
     // 5. Stage all changes and complete the merge commit
-    if let Err(e) =
-        GitService::exec_git_or_throw(&["add", "."], &worktree_path, None).await
-    {
+    if let Err(e) = GitService::exec_git_or_throw(&["add", "."], &worktree_path, None).await {
         let err_msg = format!("Failed to stage changes: {e}");
         return Err(AppError::Internal(anyhow::anyhow!(err_msg)));
     }
@@ -1974,7 +2321,9 @@ async fn resolve_workspace(
     task: &mut crate::models::task::Task,
 ) -> Result<(std::path::PathBuf, Option<String>), AppError> {
     let repo_id = task.repository_id.as_ref().ok_or_else(|| {
-        AppError::Validation("Task has no repository_id - cannot determine working directory".to_string())
+        AppError::Validation(
+            "Task has no repository_id - cannot determine working directory".to_string(),
+        )
     })?;
 
     let repo_id_clone = repo_id.clone();
@@ -1990,7 +2339,10 @@ async fn resolve_workspace(
         })?;
 
     // Set up an isolated worktree for this task
-    state.sse_emitter.emit_log(task_id, "info", "Setting up worktree for task", None).await;
+    state
+        .sse_emitter
+        .emit_log(task_id, "info", "Setting up worktree for task", None)
+        .await;
 
     let worktree_result = state
         .git_service
@@ -2031,19 +2383,34 @@ async fn resolve_workspace(
     if worktree_result.reused {
         state
             .sse_emitter
-            .emit_log(task_id, "info", &format!("Reusing existing worktree at: {}", workspace_path.display()), None)
+            .emit_log(
+                task_id,
+                "info",
+                &format!("Reusing existing worktree at: {}", workspace_path.display()),
+                None,
+            )
             .await;
     } else {
         state
             .sse_emitter
-            .emit_log(task_id, "info", &format!("New worktree created at: {}", workspace_path.display()), None)
+            .emit_log(
+                task_id,
+                "info",
+                &format!("New worktree created at: {}", workspace_path.display()),
+                None,
+            )
             .await;
     }
 
     if worktree_result.is_empty_repo {
         state
             .sse_emitter
-            .emit_log(task_id, "info", "Repository is empty (no commits) - agent will create initial project structure", None)
+            .emit_log(
+                task_id,
+                "info",
+                "Repository is empty (no commits) - agent will create initial project structure",
+                None,
+            )
             .await;
     }
 
@@ -2080,7 +2447,10 @@ async fn resolve_workspace(
                     .emit_log(
                         task_id,
                         "info",
-                        &format!("Base commit captured for diff: {}", &base_commit[..8.min(base_commit.len())]),
+                        &format!(
+                            "Base commit captured for diff: {}",
+                            &base_commit[..8.min(base_commit.len())]
+                        ),
                         None,
                     )
                     .await;
@@ -2113,10 +2483,44 @@ async fn resolve_workspace(
             }
         }
 
-        if ctx.is_empty() { None } else { Some(ctx) }
+        if ctx.is_empty() {
+            None
+        } else {
+            Some(ctx)
+        }
     };
 
     Ok((workspace_path, repo_context))
+}
+
+async fn load_chrome_mcp_agent_config(
+    state: &AppState,
+    agent_type: &AgentType,
+) -> Result<(bool, Option<String>), AppError> {
+    if agent_type != &AgentType::ClaudeCode {
+        return Ok((false, None));
+    }
+
+    let (enabled, url) = state
+        .db
+        .call(|conn| settings_service::get_chrome_mcp_config(conn))
+        .await?;
+
+    let url = url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    Ok((enabled, url))
+}
+
+fn add_chrome_mcp_env(
+    env: &mut std::collections::HashMap<String, String>,
+    chrome_mcp_url: Option<&str>,
+) {
+    if let Some(url) = chrome_mcp_url {
+        env.insert("CHROME_MCP_URL".to_string(), url.to_string());
+        env.insert("MCP_CHROME_URL".to_string(), url.to_string());
+    }
 }
 
 /// Builds CLIRunnerOptions from a task and starts the agent.
@@ -2141,12 +2545,15 @@ pub async fn start_agent_for_task(
         .and_then(|s| s.parse::<AgentType>().ok())
         .unwrap_or(AgentType::ClaudeCode);
 
-    let env = std::collections::HashMap::new();
+    let (chrome_mcp_enabled, chrome_mcp_url) =
+        load_chrome_mcp_agent_config(state, &agent_type).await?;
+    let mut env = std::collections::HashMap::new();
+    add_chrome_mcp_env(&mut env, chrome_mcp_url.as_deref());
 
     let cwd_str = cwd.to_str().unwrap_or("");
     let spec = task.user_input.as_deref().unwrap_or(&task.description);
 
-    let prompt = cli_prompts::build_task_prompt(
+    let mut prompt = cli_prompts::build_task_prompt(
         &task.title,
         spec,
         &task.context_files,
@@ -2154,6 +2561,9 @@ pub async fn start_agent_for_task(
         task.agent_type.as_deref(),
         Some(cwd_str),
     );
+    if chrome_mcp_enabled {
+        prompt = cli_prompts::append_chrome_mcp_instructions(prompt);
+    }
 
     // Dispatch based on agent type: API-based vs CLI
     let runner_options = if agent_type.is_api_based() {
@@ -2165,7 +2575,10 @@ pub async fn start_agent_for_task(
             })
             .await?
             .ok_or_else(|| {
-                AppError::Validation("MiniMax API key not configured. Go to Settings → Connections to add it.".into())
+                AppError::Validation(
+                    "MiniMax API key not configured. Go to Settings → Connections to add it."
+                        .into(),
+                )
             })?;
 
         RunnerOptions::API(APIRunnerOptions {
@@ -2185,6 +2598,8 @@ pub async fn start_agent_for_task(
             cwd,
             env,
             plan_only: false,
+            resume_session_id: None,
+            chrome_mcp_enabled,
         })
     };
 
@@ -2215,12 +2630,15 @@ pub async fn resume_agent_for_task(
         .and_then(|s| s.parse::<AgentType>().ok())
         .unwrap_or(AgentType::ClaudeCode);
 
-    let env = std::collections::HashMap::new();
+    let (chrome_mcp_enabled, chrome_mcp_url) =
+        load_chrome_mcp_agent_config(state, &agent_type).await?;
+    let mut env = std::collections::HashMap::new();
+    add_chrome_mcp_env(&mut env, chrome_mcp_url.as_deref());
 
     let cwd_str = cwd.to_str().unwrap_or("");
     let spec = task.user_input.as_deref().unwrap_or(&task.description);
 
-    let prompt = cli_prompts::build_resume_prompt(
+    let mut prompt = cli_prompts::build_resume_prompt(
         &task.title,
         spec,
         feedback,
@@ -2228,6 +2646,9 @@ pub async fn resume_agent_for_task(
         task.agent_type.as_deref(),
         Some(cwd_str),
     );
+    if chrome_mcp_enabled {
+        prompt = cli_prompts::append_chrome_mcp_instructions(prompt);
+    }
 
     let runner_options = if agent_type.is_api_based() {
         let api_key = state
@@ -2236,9 +2657,7 @@ pub async fn resume_agent_for_task(
                 crate::services::secrets_service::get_secret(conn, "ai_api_key", Some("minimax"))
             })
             .await?
-            .ok_or_else(|| {
-                AppError::Validation("MiniMax API key not configured.".into())
-            })?;
+            .ok_or_else(|| AppError::Validation("MiniMax API key not configured.".into()))?;
 
         RunnerOptions::API(APIRunnerOptions {
             task_id: task_id.to_string(),
@@ -2257,6 +2676,8 @@ pub async fn resume_agent_for_task(
             cwd,
             env,
             plan_only: false,
+            resume_session_id: None,
+            chrome_mcp_enabled,
         })
     };
 
@@ -2281,4 +2702,24 @@ async fn deprecated_gone() -> impl IntoResponse {
             "message": "This endpoint has been removed. Use the two-agent workflow instead."
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qa_command_allows_playwright_defaults() {
+        let command = validate_qa_command(Some("npx playwright test --trace on --reporter=line"))
+            .expect("default Playwright command should be allowed");
+
+        assert_eq!(command, "npx playwright test --trace on --reporter=line");
+    }
+
+    #[test]
+    fn qa_command_blocks_shell_control_characters() {
+        let error = validate_qa_command(Some("npx playwright test; rm -rf .")).unwrap_err();
+
+        assert!(error.to_string().contains("shell control"));
+    }
 }

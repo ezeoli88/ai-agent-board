@@ -140,6 +140,28 @@ export const DisconnectResponseSchema = z.object({
 export type DisconnectResponse = z.infer<typeof DisconnectResponseSchema>;
 
 // ============================================================================
+// Chrome MCP Config
+// ============================================================================
+
+export const ChromeMcpConfigSchema = z.object({
+  enabled: z.boolean(),
+  url: z.string().url().nullable(),
+});
+export type ChromeMcpConfig = z.infer<typeof ChromeMcpConfigSchema>;
+
+export const UpdateChromeMcpConfigSchema = z.object({
+  enabled: z.boolean(),
+  url: z.string().nullable().optional(),
+});
+export type UpdateChromeMcpConfigInput = z.infer<typeof UpdateChromeMcpConfigSchema>;
+
+export const UpdateChromeMcpConfigResponseSchema = z.object({
+  success: z.boolean(),
+  config: ChromeMcpConfigSchema,
+});
+export type UpdateChromeMcpConfigResponse = z.infer<typeof UpdateChromeMcpConfigResponseSchema>;
+
+// ============================================================================
 // localStorage Config (frontend only, not validated by server)
 // ============================================================================
 

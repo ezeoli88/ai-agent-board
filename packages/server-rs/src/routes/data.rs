@@ -60,7 +60,16 @@ fn table_column_whitelist() -> HashMap<&'static str, &'static [&'static str]> {
     );
     m.insert(
         "task_logs",
-        ["id", "task_id", "timestamp", "level", "message", "event_type", "event_data"].as_slice(),
+        [
+            "id",
+            "task_id",
+            "timestamp",
+            "level",
+            "message",
+            "event_type",
+            "event_data",
+        ]
+        .as_slice(),
     );
     m.insert(
         "repositories",
@@ -342,9 +351,7 @@ fn get_all_rows_from_table(
     table: &str,
 ) -> Result<Vec<HashMap<String, Value>>, AppError> {
     if !VALID_TABLES.contains(&table) {
-        return Err(AppError::Validation(format!(
-            "Invalid table name: {table}"
-        )));
+        return Err(AppError::Validation(format!("Invalid table name: {table}")));
     }
 
     let sql = format!("SELECT * FROM {table}");
@@ -371,9 +378,7 @@ fn get_all_rows_from_table(
                         let text = String::from_utf8_lossy(s).to_string();
                         Value::String(text)
                     }
-                    rusqlite::types::ValueRef::Blob(b) => {
-                        Value::String(hex::encode(b))
-                    }
+                    rusqlite::types::ValueRef::Blob(b) => Value::String(hex::encode(b)),
                 };
                 map.insert(col_name.clone(), json_val);
             }
@@ -403,9 +408,7 @@ fn insert_rows(
     }
 
     if !VALID_TABLES.contains(&table) {
-        return Err(AppError::Validation(format!(
-            "Invalid table name: {table}"
-        )));
+        return Err(AppError::Validation(format!("Invalid table name: {table}")));
     }
 
     let mut inserted = 0usize;

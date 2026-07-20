@@ -101,9 +101,7 @@ const ALLOWED_UPDATE_COLUMNS: &[&str] = &[
 /// Safely parses a JSON array string, returning an empty vec on failure.
 fn safe_parse_json_array(value: Option<String>) -> Vec<String> {
     match value {
-        Some(s) if !s.is_empty() => {
-            serde_json::from_str::<Vec<String>>(&s).unwrap_or_default()
-        }
+        Some(s) if !s.is_empty() => serde_json::from_str::<Vec<String>>(&s).unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -182,17 +180,12 @@ fn extract_title_from_spec(spec: &str) -> Option<String> {
 /// Supports both the legacy workflow and the two-agent workflow.
 /// For two-agent workflow tasks (those with `repository_id` AND `user_input`),
 /// the initial status is `draft`. For legacy tasks, the initial status is `backlog`.
-pub fn create_task(
-    conn: &Connection,
-    input: &CreateTaskServiceInput,
-) -> Result<Task, AppError> {
+pub fn create_task(conn: &Connection, input: &CreateTaskServiceInput) -> Result<Task, AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let context_files_json = serde_json::to_string(
-        input.context_files.as_deref().unwrap_or(&[]),
-    )
-    .unwrap_or_else(|_| "[]".to_string());
+    let context_files_json = serde_json::to_string(input.context_files.as_deref().unwrap_or(&[]))
+        .unwrap_or_else(|_| "[]".to_string());
 
     // Determine if this is a two-agent workflow task
     let is_two_agent = input.repository_id.is_some() && input.user_input.is_some();
@@ -291,7 +284,11 @@ pub fn get_all_tasks(
     repo_url: Option<&str>,
     repository_id: Option<&str>,
 ) -> Result<Vec<Task>, AppError> {
-    debug!(repo_url = repo_url, repository_id = repository_id, "Fetching all tasks");
+    debug!(
+        repo_url = repo_url,
+        repository_id = repository_id,
+        "Fetching all tasks"
+    );
 
     let mut sql = format!("SELECT {TASK_COLUMNS} FROM tasks");
     let mut conditions: Vec<String> = Vec::new();
@@ -314,8 +311,7 @@ pub fn get_all_tasks(
 
     let mut stmt = conn.prepare(&sql).map_err(AppError::Database)?;
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let rows = stmt
         .query_map(param_refs.as_slice(), row_to_task)
@@ -351,11 +347,7 @@ pub fn get_task_by_id(conn: &Connection, id: &str) -> Result<Task, AppError> {
 /// is always set to the current time. Returns the updated task.
 ///
 /// Returns `AppError::NotFound` if the task does not exist.
-pub fn update_task(
-    conn: &Connection,
-    id: &str,
-    input: &UpdateTaskInput,
-) -> Result<Task, AppError> {
+pub fn update_task(conn: &Connection, id: &str, input: &UpdateTaskInput) -> Result<Task, AppError> {
     info!(id = id, "Updating task");
 
     // Verify the task exists
@@ -463,17 +455,12 @@ pub fn update_task(
     values.push(Box::new(now));
     idx += 1;
 
-    let sql = format!(
-        "UPDATE tasks SET {} WHERE id = ?{}",
-        sets.join(", "),
-        idx
-    );
+    let sql = format!("UPDATE tasks SET {} WHERE id = ?{}", sets.join(", "), idx);
     values.push(Box::new(id.to_string()));
 
     debug!(id = id, sql = %sql, "Executing UPDATE");
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        values.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|p| p.as_ref()).collect();
     let changes = conn
         .execute(&sql, param_refs.as_slice())
         .map_err(AppError::Database)?;
@@ -515,15 +502,11 @@ pub fn delete_task(conn: &Connection, id: &str) -> Result<(), AppError> {
 }
 
 /// Retrieves tasks by status.
-pub fn get_tasks_by_status(
-    conn: &Connection,
-    status: &TaskStatus,
-) -> Result<Vec<Task>, AppError> {
+pub fn get_tasks_by_status(conn: &Connection, status: &TaskStatus) -> Result<Vec<Task>, AppError> {
     debug!(status = %status, "Fetching tasks by status");
 
-    let sql = format!(
-        "SELECT {TASK_COLUMNS} FROM tasks WHERE status = ?1 ORDER BY created_at DESC"
-    );
+    let sql =
+        format!("SELECT {TASK_COLUMNS} FROM tasks WHERE status = ?1 ORDER BY created_at DESC");
     let mut stmt = conn.prepare(&sql).map_err(AppError::Database)?;
 
     let rows = stmt
@@ -881,10 +864,7 @@ mod tests {
         let task = create_task(&conn, &input).unwrap();
 
         let updated = update_spec(&conn, &task.id, "My edited spec", false).unwrap();
-        assert_eq!(
-            updated.final_spec,
-            Some("My edited spec".to_string())
-        );
+        assert_eq!(updated.final_spec, Some("My edited spec".to_string()));
         assert!(updated.was_spec_edited);
     }
 
@@ -924,10 +904,7 @@ mod tests {
         // Approve with edited spec
         let approved = approve_spec(&conn, &task.id, Some("# Edited Spec")).unwrap();
         assert_eq!(approved.status, TaskStatus::Approved);
-        assert_eq!(
-            approved.final_spec,
-            Some("# Edited Spec".to_string())
-        );
+        assert_eq!(approved.final_spec, Some("# Edited Spec".to_string()));
         assert!(approved.was_spec_edited);
     }
 

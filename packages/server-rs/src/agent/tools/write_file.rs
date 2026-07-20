@@ -41,9 +41,7 @@ pub async fn execute(args: Value, cwd: &Path) -> ToolResult {
 
     // Path traversal check
     if !path.starts_with(cwd) {
-        return ToolResult::err(format!(
-            "Error: Path escapes working directory: {raw_path}"
-        ));
+        return ToolResult::err(format!("Error: Path escapes working directory: {raw_path}"));
     }
 
     // Create parent directories

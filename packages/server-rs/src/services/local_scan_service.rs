@@ -128,11 +128,8 @@ async fn inspect_repo(repo_path: &Path, name: &str) -> Result<LocalRepository, A
         .unwrap_or_else(|| "main".to_string());
 
     // Detect default branch (prefer remote HEAD)
-    let default_branch = sync_git_output(
-        &["symbolic-ref", "refs/remotes/origin/HEAD"],
-        repo_path,
-    )
-    .map(|head| head.replace("refs/remotes/origin/", ""));
+    let default_branch = sync_git_output(&["symbolic-ref", "refs/remotes/origin/HEAD"], repo_path)
+        .map(|head| head.replace("refs/remotes/origin/", ""));
 
     // Get remote URL
     let remote_url = sync_git_output(&["remote", "get-url", "origin"], repo_path);
@@ -205,7 +202,8 @@ fn get_default_scan_path() -> PathBuf {
 
     // Try to get git root
     let mut cmd = StdCommand::new("git");
-    cmd.args(["rev-parse", "--show-toplevel"]).current_dir(&base_dir);
+    cmd.args(["rev-parse", "--show-toplevel"])
+        .current_dir(&base_dir);
 
     #[cfg(target_os = "windows")]
     {

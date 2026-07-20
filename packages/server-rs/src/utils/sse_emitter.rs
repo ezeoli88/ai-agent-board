@@ -112,13 +112,11 @@ impl SSEEmitter {
     /// subscription point.
     pub async fn subscribe(&self, task_id: &str) -> broadcast::Receiver<SSEEvent> {
         let mut channels = self.channels.write().await;
-        let sender = channels
-            .entry(task_id.to_string())
-            .or_insert_with(|| {
-                let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
-                debug!(task_id, "Created new SSE channel");
-                tx
-            });
+        let sender = channels.entry(task_id.to_string()).or_insert_with(|| {
+            let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+            debug!(task_id, "Created new SSE channel");
+            tx
+        });
         sender.subscribe()
     }
 
@@ -243,18 +241,19 @@ impl SSEEmitter {
     }
 
     /// Emits a completion event for a task.
-    pub async fn emit_complete(
-        &self,
-        task_id: &str,
-        pr_url: Option<&str>,
-        summary: Option<&str>,
-    ) {
+    pub async fn emit_complete(&self, task_id: &str, pr_url: Option<&str>, summary: Option<&str>) {
         let mut obj = serde_json::Map::new();
         if let Some(url) = pr_url {
-            obj.insert("pr_url".to_string(), serde_json::Value::String(url.to_string()));
+            obj.insert(
+                "pr_url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
         }
         if let Some(s) = summary {
-            obj.insert("summary".to_string(), serde_json::Value::String(s.to_string()));
+            obj.insert(
+                "summary".to_string(),
+                serde_json::Value::String(s.to_string()),
+            );
         }
         self.emit(
             task_id,

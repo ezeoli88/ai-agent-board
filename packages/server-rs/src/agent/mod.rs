@@ -10,4 +10,4 @@ pub mod xml_parser;
 
 pub use api_runner::APIAgentRunner;
 pub use cli_runner::CLIAgentRunner;
-pub use types::{AgentRunResult, AgentType, APIRunnerOptions, CLICommand, CLIRunnerOptions};
+pub use types::{APIRunnerOptions, AgentRunResult, AgentType, CLICommand, CLIRunnerOptions};

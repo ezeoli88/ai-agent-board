@@ -1,9 +1,10 @@
 'use client'
 
-import { FileText, ScrollText, GitPullRequest, MessageSquarePlus, MessageSquare, MessageCircle } from 'lucide-react'
+import { FileText, ScrollText, GitPullRequest, MessageSquarePlus, MessageSquare, MessageCircle, TestTube2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
+import { FEATURE_FLAGS } from '@/config/features'
 import { cn } from '@/lib/utils'
 import { getAgentDisplayInfo } from '../utils/agent-display'
 import type { Task } from '../types'
@@ -14,6 +15,7 @@ import { TaskActions } from './task-actions'
 import { TaskLogs } from './task-logs'
 import { TaskChat } from './task-chat'
 import { TaskDiff } from './task-diff'
+import { TaskQA } from './task-qa'
 import { FeedbackSection } from './feedback-section'
 import { PRComments } from './pr-comments'
 import { PatternSuggestion } from './pattern-suggestion'
@@ -92,6 +94,12 @@ export function TaskDetail({ task }: TaskDetailProps) {
                 <GitPullRequest className="size-4" />
                 Changes
               </TabsTrigger>
+              {FEATURE_FLAGS.qaDashboard && (
+                <TabsTrigger value="qa" className="gap-1.5">
+                  <TestTube2 className="size-4" />
+                  QA
+                </TabsTrigger>
+              )}
               <TabsTrigger value="comments" className="gap-1.5" disabled={!showCommentsTab}>
                 <MessageSquare className="size-4" />
                 Comments
@@ -184,6 +192,12 @@ export function TaskDetail({ task }: TaskDetailProps) {
                 </Card>
               )}
             </TabsContent>
+
+            {FEATURE_FLAGS.qaDashboard && (
+              <TabsContent value="qa" className="mt-0">
+                <TaskQA task={task} />
+              </TabsContent>
+            )}
 
             <TabsContent value="comments" className="mt-0">
               {showCommentsTab ? (

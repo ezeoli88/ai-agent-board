@@ -19,6 +19,7 @@ export { FileChanges, FileChangesSummary } from "./file-changes";
 export { DiffViewer } from "./diff-viewer";
 export { DiffStats, DiffStatsCompact, DiffStatsDetailed } from "./diff-stats";
 export { TaskDiff, TaskDiffSkeleton } from "./task-diff";
+export { TaskQA } from "./task-qa";
 export { PRComments } from "./pr-comments";
 export { CreateTaskDialog } from "./create-task-dialog";
 export { PatternSuggestion } from "./pattern-suggestion";

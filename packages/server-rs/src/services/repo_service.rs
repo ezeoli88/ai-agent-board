@@ -94,8 +94,7 @@ pub fn get_repository_by_id(conn: &Connection, id: &str) -> Result<Option<Reposi
 /// Returns `None` if the URL does not match the expected pattern.
 pub fn parse_owner_repo(url: &str) -> Option<(String, String)> {
     // Try GitHub/GitLab HTTPS pattern
-    let re =
-        regex_lite::Regex::new(r"(?:github|gitlab)\.com[/:]([^/]+)/([^/\s.]+)").unwrap();
+    let re = regex_lite::Regex::new(r"(?:github|gitlab)\.com[/:]([^/]+)/([^/\s.]+)").unwrap();
     if let Some(caps) = re.captures(url) {
         if let (Some(owner_m), Some(repo_m)) = (caps.get(1), caps.get(2)) {
             let owner = owner_m.as_str().to_string();
@@ -114,19 +113,13 @@ mod tests {
     #[test]
     fn test_parse_owner_repo_github_https() {
         let result = parse_owner_repo("https://github.com/ezeoli88/dash-agent");
-        assert_eq!(
-            result,
-            Some(("ezeoli88".into(), "dash-agent".into()))
-        );
+        assert_eq!(result, Some(("ezeoli88".into(), "dash-agent".into())));
     }
 
     #[test]
     fn test_parse_owner_repo_gitlab_https() {
         let result = parse_owner_repo("https://gitlab.com/user/project.git");
-        assert_eq!(
-            result,
-            Some(("user".into(), "project".into()))
-        );
+        assert_eq!(result, Some(("user".into(), "project".into())));
     }
 
     #[test]

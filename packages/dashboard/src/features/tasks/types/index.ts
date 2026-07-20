@@ -12,8 +12,13 @@
 export {
   // Task schemas and types
   TASK_STATUSES,
+  QA_RUN_STATUSES,
   type TaskStatus,
+  type QaRunStatus,
+  type QaRun,
+  type CreateQaRunInput,
   type Task,
+  type QaBoardItem,
   type CreateTaskInput,
   type UpdateTaskInput,
   // Two-agent workflow types

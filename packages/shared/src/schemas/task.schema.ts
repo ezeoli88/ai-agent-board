@@ -55,6 +55,41 @@ export const TaskStatusSchema = z.enum(TASK_STATUSES);
  */
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
+export const QA_RUN_STATUSES = [
+  'queued',
+  'running',
+  'passed',
+  'failed',
+  'canceled',
+] as const;
+
+export const QaRunStatusSchema = z.enum(QA_RUN_STATUSES);
+export type QaRunStatus = z.infer<typeof QaRunStatusSchema>;
+
+export const QaRunSchema = z.object({
+  id: z.string().uuid(),
+  task_id: z.string().uuid(),
+  status: QaRunStatusSchema,
+  test_command: z.string(),
+  target_url: z.string().nullable(),
+  report_path: z.string().nullable(),
+  trace_path: z.string().nullable(),
+  stdout: z.string().nullable(),
+  stderr: z.string().nullable(),
+  exit_code: z.number().nullable(),
+  started_at: z.string().datetime().nullable(),
+  completed_at: z.string().datetime().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
+export type QaRun = z.infer<typeof QaRunSchema>;
+
+export const CreateQaRunSchema = z.object({
+  target_url: z.string().optional(),
+  test_command: z.string().optional(),
+});
+export type CreateQaRunInput = z.infer<typeof CreateQaRunSchema>;
+
 /**
  * Complete Task entity schema with two-agent workflow fields
  */
@@ -107,6 +142,12 @@ export const TaskSchema = z.object({
  * Task type inferred from the schema
  */
 export type Task = z.infer<typeof TaskSchema>;
+
+export const QaBoardItemSchema = z.object({
+  task: TaskSchema,
+  latest_run: QaRunSchema.nullable(),
+});
+export type QaBoardItem = z.infer<typeof QaBoardItemSchema>;
 
 /**
  * Schema for creating a new task in the two-agent workflow.

@@ -1,0 +1,11 @@
+[mcp_servers.agent-board]
+url = "http://localhost:8080/api/mcp"
+
+[mcp_servers.chrome-devtools]
+command = "cmd"
+args = [
+    "/c",
+    "npx",
+    "-y",
+    "chrome-devtools-mcp@latest",
+]

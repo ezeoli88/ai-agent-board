@@ -3,13 +3,14 @@ import { useQueryClient } from '@tanstack/react-query'
 import { getAuthToken } from '@/lib/auth'
 import { taskKeys } from '@/features/tasks/hooks/query-keys'
 import { repoKeys } from '@/features/repos/hooks/query-keys'
+import { specKeys } from '@/features/specs/hooks/query-keys'
 
 /**
  * Data change event pushed by the server when tasks or repos are mutated.
  * Matches the DataChangeEvent interface on the backend.
  */
 interface DataChangeEvent {
-  entity: 'task' | 'repo'
+  entity: 'task' | 'repo' | 'spec' | 'qa_run'
   action: 'created' | 'updated' | 'deleted'
   id?: string
 }
@@ -49,11 +50,19 @@ export function useDataInvalidation() {
             queryClient.invalidateQueries({ queryKey: taskKeys.detail(data.id) })
             queryClient.invalidateQueries({ queryKey: taskKeys.changes(data.id) })
           }
+        } else if (data.entity === 'qa_run') {
+          queryClient.invalidateQueries({ queryKey: taskKeys.qaBoards() })
+          queryClient.invalidateQueries({ queryKey: taskKeys.all })
         } else if (data.entity === 'repo') {
           // Invalidate all repo queries
           queryClient.invalidateQueries({ queryKey: repoKeys.lists() })
           if (data.id) {
             queryClient.invalidateQueries({ queryKey: repoKeys.detail(data.id) })
+          }
+        } else if (data.entity === 'spec') {
+          queryClient.invalidateQueries({ queryKey: specKeys.lists() })
+          if (data.id) {
+            queryClient.invalidateQueries({ queryKey: specKeys.detail(data.id) })
           }
         }
       } catch {

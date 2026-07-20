@@ -17,6 +17,8 @@
 //! - `DELETE /api/setup/ai-provider` - Disconnect AI provider
 //! - `DELETE /api/setup/github` - Disconnect GitHub
 //! - `GET /api/setup/mcp-config` - Get MCP server configuration
+//! - `GET /api/setup/chrome-mcp-config` - Get Chrome MCP client configuration
+//! - `PATCH /api/setup/chrome-mcp-config` - Update Chrome MCP client configuration
 
 use axum::{
     extract::State,
@@ -24,7 +26,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{info, warn};
 
@@ -43,6 +45,20 @@ const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 struct UpdateSettingsRequest {
     default_agent_type: Option<serde_json::Value>,
     default_agent_model: Option<serde_json::Value>,
+}
+
+/// GET /setup/chrome-mcp-config response body.
+#[derive(Debug, Clone, Serialize)]
+struct ChromeMcpConfigResponse {
+    enabled: bool,
+    url: Option<String>,
+}
+
+/// PATCH /setup/chrome-mcp-config request body.
+#[derive(Debug, Deserialize)]
+struct UpdateChromeMcpConfigRequest {
+    enabled: bool,
+    url: Option<String>,
 }
 
 /// Valid agent types.
@@ -105,6 +121,10 @@ pub fn router() -> Router<AppState> {
         .route("/github", delete(delete_github))
         // MCP config
         .route("/mcp-config", get(get_mcp_config))
+        .route(
+            "/chrome-mcp-config",
+            get(get_chrome_mcp_config).patch(update_chrome_mcp_config),
+        )
 }
 
 // ============================================================================
@@ -114,9 +134,7 @@ pub fn router() -> Router<AppState> {
 /// GET /api/setup/agents
 ///
 /// Returns detected installed coding CLI agents plus API-based agents (OpenRouter).
-async fn get_agents(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn get_agents(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("GET /setup/agents");
 
     let agents =
@@ -133,9 +151,7 @@ async fn get_agents(
 /// GET /api/setup/settings
 ///
 /// Returns the current application settings (default agent type and model).
-async fn get_settings(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn get_settings(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("GET /setup/settings");
 
     let (agent_type, agent_model) = state
@@ -176,7 +192,9 @@ async fn update_settings(
             let agent_type = s.to_string();
             state
                 .db
-                .call(move |conn| settings_service::set_setting(conn, "default_agent_type", &agent_type))
+                .call(move |conn| {
+                    settings_service::set_setting(conn, "default_agent_type", &agent_type)
+                })
                 .await?;
         } else {
             return Err(AppError::Validation(
@@ -196,7 +214,9 @@ async fn update_settings(
             let agent_model = s.to_string();
             state
                 .db
-                .call(move |conn| settings_service::set_setting(conn, "default_agent_model", &agent_model))
+                .call(move |conn| {
+                    settings_service::set_setting(conn, "default_agent_model", &agent_model)
+                })
                 .await?;
         } else {
             return Err(AppError::Validation(
@@ -252,7 +272,9 @@ async fn validate_openrouter_key(
     info!("POST /setup/validate-openrouter-key");
 
     if body.api_key.is_empty() {
-        return Ok(Json(json!({ "valid": false, "error": "API key is required" })));
+        return Ok(Json(
+            json!({ "valid": false, "error": "API key is required" }),
+        ));
     }
 
     match fetch_openrouter_models(&body.api_key).await {
@@ -297,7 +319,9 @@ async fn validate_minimax_key(
     info!("POST /setup/validate-minimax-key");
 
     if body.api_key.is_empty() {
-        return Ok(Json(json!({ "valid": false, "error": "API key is required" })));
+        return Ok(Json(
+            json!({ "valid": false, "error": "API key is required" }),
+        ));
     }
 
     match crate::agent::api_client::validate_minimax_key(&body.api_key).await {
@@ -398,7 +422,9 @@ struct OpenRouterModel {
 async fn fetch_openrouter_models(api_key: &str) -> Result<Vec<OpenRouterModel>, String> {
     let client = reqwest::Client::new();
     let resp = client
-        .get(format!("{OPENROUTER_BASE_URL}/models?supported_parameters=tools"))
+        .get(format!(
+            "{OPENROUTER_BASE_URL}/models?supported_parameters=tools"
+        ))
         .header("Authorization", format!("Bearer {api_key}"))
         .header("HTTP-Referer", "https://dash-agent.local")
         .header("X-Title", "dash-agent")
@@ -532,9 +558,7 @@ async fn delete_github() -> Result<impl IntoResponse, AppError> {
 ///
 /// Returns the MCP server configuration for IDE/CLI setup.
 /// Provides the current server URL and port.
-async fn get_mcp_config(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn get_mcp_config(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("GET /setup/mcp-config");
 
     let port = state.config.port;
@@ -546,4 +570,100 @@ async fn get_mcp_config(
         "url": url,
         "port": port,
     })))
+}
+
+/// GET /api/setup/chrome-mcp-config
+///
+/// Returns the Chrome MCP client configuration used by QA runs.
+async fn get_chrome_mcp_config(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    info!("GET /setup/chrome-mcp-config");
+
+    let (enabled, url) = state
+        .db
+        .call(|conn| settings_service::get_chrome_mcp_config(conn))
+        .await?;
+
+    Ok(Json(ChromeMcpConfigResponse { enabled, url }))
+}
+
+/// PATCH /api/setup/chrome-mcp-config
+///
+/// Updates the Chrome MCP client configuration used by QA runs.
+async fn update_chrome_mcp_config(
+    State(state): State<AppState>,
+    Json(body): Json<UpdateChromeMcpConfigRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    info!("PATCH /setup/chrome-mcp-config");
+
+    let url = normalize_chrome_mcp_url(body.enabled, body.url.as_deref())?;
+    let enabled = body.enabled;
+    let url_for_db = url.clone();
+
+    state
+        .db
+        .call(move |conn| {
+            settings_service::set_chrome_mcp_config(conn, enabled, url_for_db.as_deref())
+        })
+        .await?;
+
+    let config = ChromeMcpConfigResponse {
+        enabled: body.enabled,
+        url,
+    };
+
+    Ok(Json(json!({
+        "success": true,
+        "config": config,
+    })))
+}
+
+fn normalize_chrome_mcp_url(enabled: bool, url: Option<&str>) -> Result<Option<String>, AppError> {
+    let url = url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    if enabled && url.is_none() {
+        return Err(AppError::Validation(
+            "Chrome MCP URL is required when Chrome MCP is enabled".to_string(),
+        ));
+    }
+
+    if let Some(ref value) = url {
+        let parsed = reqwest::Url::parse(value).map_err(|_| {
+            AppError::Validation("Chrome MCP URL must be a valid HTTP or HTTPS URL".to_string())
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(AppError::Validation(
+                "Chrome MCP URL must use http or https".to_string(),
+            ));
+        }
+    }
+
+    Ok(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chrome_mcp_url_requires_value_when_enabled() {
+        let error = normalize_chrome_mcp_url(true, Some("   ")).unwrap_err();
+        assert!(error.to_string().contains("required"));
+    }
+
+    #[test]
+    fn chrome_mcp_url_allows_http_urls() {
+        let url = normalize_chrome_mcp_url(true, Some(" http://localhost:9222/mcp ")).unwrap();
+        assert_eq!(url, Some("http://localhost:9222/mcp".to_string()));
+    }
+
+    #[test]
+    fn chrome_mcp_url_rejects_non_http_urls() {
+        let error = normalize_chrome_mcp_url(true, Some("file:///tmp/mcp")).unwrap_err();
+        assert!(error.to_string().contains("http or https"));
+    }
 }

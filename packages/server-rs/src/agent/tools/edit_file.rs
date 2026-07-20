@@ -45,9 +45,7 @@ pub async fn execute(args: Value, cwd: &Path) -> ToolResult {
     let path = resolve_path(cwd, raw_path);
 
     if !path.starts_with(cwd) {
-        return ToolResult::err(format!(
-            "Error: Path escapes working directory: {raw_path}"
-        ));
+        return ToolResult::err(format!("Error: Path escapes working directory: {raw_path}"));
     }
 
     if !path.exists() {

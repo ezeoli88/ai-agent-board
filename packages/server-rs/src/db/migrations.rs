@@ -185,6 +185,145 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
                 CREATE INDEX IF NOT EXISTS idx_task_logs_event_type ON task_logs(event_type);
             ",
         },
+        Migration {
+            version: 12,
+            description: "Create specs table for standalone SDD demo workflow",
+            sql: "
+                CREATE TABLE IF NOT EXISTS specs (
+                    id TEXT PRIMARY KEY,
+                    repository_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    user_input TEXT NOT NULL,
+                    status TEXT DEFAULT 'idea',
+
+                    generated_spec TEXT,
+                    final_spec TEXT,
+                    spec_approved_at TEXT,
+
+                    generated_plan TEXT,
+                    final_plan TEXT,
+                    plan_approved_at TEXT,
+
+                    generated_tasks TEXT,
+                    final_tasks TEXT,
+                    tasks_approved_at TEXT,
+                    task_ids TEXT DEFAULT '[]',
+
+                    agent_type TEXT,
+                    agent_model TEXT,
+                    error TEXT,
+
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_specs_repository_id ON specs(repository_id);
+                CREATE INDEX IF NOT EXISTS idx_specs_status ON specs(status);
+                CREATE INDEX IF NOT EXISTS idx_specs_updated_at ON specs(updated_at);
+            ",
+        },
+        Migration {
+            version: 13,
+            description: "Create generic agent_events table for task and spec SSE persistence",
+            sql: "
+                CREATE TABLE IF NOT EXISTS agent_events (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                    level TEXT DEFAULT 'info',
+                    message TEXT NOT NULL,
+                    event_type TEXT DEFAULT 'log',
+                    event_data TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id);
+                CREATE INDEX IF NOT EXISTS idx_agent_events_timestamp ON agent_events(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_agent_events_event_type ON agent_events(event_type);
+            ",
+        },
+        Migration {
+            version: 14,
+            description: "Add clarification fields to specs",
+            sql: "
+                ALTER TABLE specs ADD COLUMN clarification_questions TEXT DEFAULT '[]';
+                ALTER TABLE specs ADD COLUMN clarification_answers TEXT DEFAULT '[]';
+                ALTER TABLE specs ADD COLUMN clarification_answered_at TEXT;
+            ",
+        },
+        Migration {
+            version: 15,
+            description: "Add agent session id to specs for resumable spec chat",
+            sql: "
+                ALTER TABLE specs ADD COLUMN agent_session_id TEXT;
+            ",
+        },
+        Migration {
+            version: 16,
+            description: "Create spec agent role sessions",
+            sql: "
+                CREATE TABLE IF NOT EXISTS spec_agent_sessions (
+                    id TEXT PRIMARY KEY,
+                    spec_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    agent_type TEXT NOT NULL,
+                    agent_model TEXT,
+                    session_id TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (spec_id) REFERENCES specs(id) ON DELETE CASCADE,
+                    UNIQUE(spec_id, role)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_spec_agent_sessions_spec_id
+                    ON spec_agent_sessions(spec_id);
+                CREATE INDEX IF NOT EXISTS idx_spec_agent_sessions_role
+                    ON spec_agent_sessions(role);
+
+                INSERT OR IGNORE INTO spec_agent_sessions (
+                    id, spec_id, role, agent_type, agent_model, session_id, created_at, updated_at
+                )
+                SELECT
+                    id || ':spec_writer',
+                    id,
+                    'spec_writer',
+                    agent_type,
+                    agent_model,
+                    agent_session_id,
+                    created_at,
+                    updated_at
+                FROM specs
+                WHERE agent_session_id IS NOT NULL
+                    AND agent_type IN ('claude-code', 'codex');
+            ",
+        },
+        Migration {
+            version: 17,
+            description: "Create QA runs table",
+            sql: "
+                CREATE TABLE IF NOT EXISTS qa_runs (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    test_command TEXT NOT NULL,
+                    target_url TEXT,
+                    report_path TEXT,
+                    trace_path TEXT,
+                    stdout TEXT,
+                    stderr TEXT,
+                    exit_code INTEGER,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_qa_runs_task_id ON qa_runs(task_id);
+                CREATE INDEX IF NOT EXISTS idx_qa_runs_status ON qa_runs(status);
+                CREATE INDEX IF NOT EXISTS idx_qa_runs_created_at ON qa_runs(created_at);
+            ",
+        },
     ];
 
     for migration in &migrations {
@@ -206,7 +345,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
                     )
                     .map_err(AppError::Database)?;
                     conn.execute_batch("COMMIT").map_err(AppError::Database)?;
-                    info!(version = migration.version, "Migration applied successfully");
+                    info!(
+                        version = migration.version,
+                        "Migration applied successfully"
+                    );
                 }
                 Err(e) => {
                     let _ = conn.execute_batch("ROLLBACK");

@@ -182,10 +182,7 @@ async fn save_ai_secret(
     // Build metadata JSON
     let metadata = {
         let mut meta = serde_json::Map::new();
-        meta.insert(
-            "modelName".to_string(),
-            json!(provider),
-        );
+        meta.insert("modelName".to_string(), json!(provider));
         meta.insert(
             "modelDescription".to_string(),
             json!(format!("{} API key", provider)),
@@ -221,9 +218,7 @@ async fn save_ai_secret(
 /// DELETE /api/secrets/ai
 ///
 /// Deletes the stored AI API key.
-async fn delete_ai_secret(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn delete_ai_secret(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("DELETE /secrets/ai");
 
     state
@@ -240,9 +235,7 @@ async fn delete_ai_secret(
 /// GET /api/secrets/ai/status
 ///
 /// Returns AI connection status without exposing the API key.
-async fn get_ai_status(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn get_ai_status(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("GET /secrets/ai/status");
 
     let (has_key, metadata_json) = state
@@ -259,13 +252,15 @@ async fn get_ai_status(
         .await?;
 
     if !has_key {
-        return Ok(Json(serde_json::to_value(AIStatusResponse {
-            connected: false,
-            provider: None,
-            model: None,
-            model_info: None,
-        })
-        .unwrap()));
+        return Ok(Json(
+            serde_json::to_value(AIStatusResponse {
+                connected: false,
+                provider: None,
+                model: None,
+                model_info: None,
+            })
+            .unwrap(),
+        ));
     }
 
     // Parse metadata to extract provider/model info
@@ -275,10 +270,7 @@ async fn get_ai_status(
                 .get("modelName")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            let model = meta
-                .get("model")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let model = meta.get("model").and_then(|v| v.as_str()).map(String::from);
             let model_info = provider.as_ref().map(|p| ModelInfo {
                 name: p.clone(),
                 description: meta
@@ -403,9 +395,7 @@ async fn delete_github_secret(
 /// GET /api/secrets/github/status
 ///
 /// Returns GitHub connection status without exposing the token.
-async fn get_github_status(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn get_github_status(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("GET /secrets/github/status");
 
     let (has_key, metadata_json) = state
@@ -422,35 +412,36 @@ async fn get_github_status(
         .await?;
 
     if !has_key {
-        return Ok(Json(serde_json::to_value(GitHubStatusResponse {
-            connected: false,
-            username: None,
-            avatar_url: None,
-            connection_method: None,
-        })
-        .unwrap()));
+        return Ok(Json(
+            serde_json::to_value(GitHubStatusResponse {
+                connected: false,
+                username: None,
+                avatar_url: None,
+                connection_method: None,
+            })
+            .unwrap(),
+        ));
     }
 
-    let (username, avatar_url, connection_method) =
-        if let Some(ref meta_str) = metadata_json {
-            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(meta_str) {
-                (
-                    meta.get("username")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                    meta.get("avatarUrl")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                    meta.get("connectionMethod")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                )
-            } else {
-                (None, None, None)
-            }
+    let (username, avatar_url, connection_method) = if let Some(ref meta_str) = metadata_json {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(meta_str) {
+            (
+                meta.get("username")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                meta.get("avatarUrl")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                meta.get("connectionMethod")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+            )
         } else {
             (None, None, None)
-        };
+        }
+    } else {
+        (None, None, None)
+    };
 
     Ok(Json(
         serde_json::to_value(GitHubStatusResponse {
@@ -585,9 +576,7 @@ async fn delete_gitlab_secret(
 /// GET /api/secrets/gitlab/status
 ///
 /// Returns GitLab connection status without exposing the token.
-async fn get_gitlab_status(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn get_gitlab_status(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("GET /secrets/gitlab/status");
 
     let (has_key, metadata_json) = state
@@ -604,12 +593,14 @@ async fn get_gitlab_status(
         .await?;
 
     if !has_key {
-        return Ok(Json(serde_json::to_value(GitLabStatusResponse {
-            connected: false,
-            username: None,
-            avatar_url: None,
-        })
-        .unwrap()));
+        return Ok(Json(
+            serde_json::to_value(GitLabStatusResponse {
+                connected: false,
+                username: None,
+                avatar_url: None,
+            })
+            .unwrap(),
+        ));
     }
 
     let (username, avatar_url) = if let Some(ref meta_str) = metadata_json {
@@ -672,9 +663,7 @@ async fn validate_gitlab_pat(
 /// GET /api/secrets/status
 ///
 /// Returns the combined status of all secret connections (AI, GitHub, GitLab).
-async fn get_combined_status(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+async fn get_combined_status(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     info!("GET /secrets/status");
 
     let (ai_has, ai_meta, gh_has, gh_meta, gl_has, gl_meta) = state
@@ -713,10 +702,7 @@ async fn get_combined_status(
                     .get("modelName")
                     .and_then(|v| v.as_str())
                     .map(String::from);
-                let m = meta
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                let m = meta.get("model").and_then(|v| v.as_str()).map(String::from);
                 let mi = p.as_ref().map(|name| ModelInfo {
                     name: name.clone(),
                     description: meta
@@ -743,26 +729,25 @@ async fn get_combined_status(
 
     // Build GitHub status
     let github = {
-        let (username, avatar_url, connection_method) =
-            if let Some(ref meta_str) = gh_meta {
-                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(meta_str) {
-                    (
-                        meta.get("username")
-                            .and_then(|v| v.as_str())
-                            .map(String::from),
-                        meta.get("avatarUrl")
-                            .and_then(|v| v.as_str())
-                            .map(String::from),
-                        meta.get("connectionMethod")
-                            .and_then(|v| v.as_str())
-                            .map(String::from),
-                    )
-                } else {
-                    (None, None, None)
-                }
+        let (username, avatar_url, connection_method) = if let Some(ref meta_str) = gh_meta {
+            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(meta_str) {
+                (
+                    meta.get("username")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    meta.get("avatarUrl")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    meta.get("connectionMethod")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                )
             } else {
                 (None, None, None)
-            };
+            }
+        } else {
+            (None, None, None)
+        };
 
         GitHubStatusResponse {
             connected: gh_has,

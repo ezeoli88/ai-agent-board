@@ -39,6 +39,22 @@ vi.mock('@/app/diff/[taskId]/page', () => ({
   default: () => <div data-testid="diff-page">Diff Page</div>,
 }))
 
+vi.mock('@/app/qa/page', () => ({
+  default: () => <div data-testid="qa-page">QA Page</div>,
+}))
+
+vi.mock('@/app/qa/runs/[runId]/page', () => ({
+  default: () => <div data-testid="qa-run-detail-page">QA Run Detail Page</div>,
+}))
+
+vi.mock('@/app/specs/page', () => ({
+  default: () => <div data-testid="specs-page">Specs Page</div>,
+}))
+
+vi.mock('@/app/specs/[specId]/page', () => ({
+  default: () => <div data-testid="spec-detail-page">Spec Detail Page</div>,
+}))
+
 vi.mock('@/app/repos/page', () => ({
   default: () => <div data-testid="repos-page">Repos Page</div>,
 }))
@@ -174,6 +190,19 @@ describe('Router guards', () => {
       await waitFor(
         () => {
           expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+        },
+        { timeout: 5000 },
+      )
+    })
+
+    it('allows navigation to /qa when QA dashboard is enabled', async () => {
+      mockReposEndpoint([{ id: 'repo-1', name: 'test-repo' }])
+
+      await renderRouter('/qa')
+
+      await waitFor(
+        () => {
+          expect(screen.getByTestId('qa-page')).toBeInTheDocument()
         },
         { timeout: 5000 },
       )

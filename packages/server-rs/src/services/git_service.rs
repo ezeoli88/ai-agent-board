@@ -168,7 +168,19 @@ impl GitService {
         cwd: &Path,
         env: Option<&HashMap<String, String>>,
     ) -> Result<GitCommandResult, AppError> {
+        Self::exec_git_with_configs(args, cwd, env, &[]).await
+    }
+
+    async fn exec_git_with_configs(
+        args: &[&str],
+        cwd: &Path,
+        env: Option<&HashMap<String, String>>,
+        configs: &[String],
+    ) -> Result<GitCommandResult, AppError> {
         let mut cmd = Command::new("git");
+        for config in configs {
+            cmd.arg("-c").arg(config);
+        }
         cmd.args(args).current_dir(cwd);
 
         // On Windows, hide the console window to avoid flashing consoles.
@@ -205,6 +217,23 @@ impl GitService {
         env: Option<&HashMap<String, String>>,
     ) -> Result<String, AppError> {
         let result = Self::exec_git(args, cwd, env).await?;
+        if result.exit_code != 0 {
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "Git command failed: git {}\nStderr: {}",
+                args.join(" "),
+                result.stderr
+            )));
+        }
+        Ok(result.stdout)
+    }
+
+    async fn exec_git_or_throw_with_configs(
+        args: &[&str],
+        cwd: &Path,
+        env: Option<&HashMap<String, String>>,
+        configs: &[String],
+    ) -> Result<String, AppError> {
+        let result = Self::exec_git_with_configs(args, cwd, env, configs).await?;
         if result.exit_code != 0 {
             return Err(AppError::Internal(anyhow::anyhow!(
                 "Git command failed: git {}\nStderr: {}",
@@ -265,8 +294,7 @@ impl GitService {
 
                     if attempt < max_retries {
                         let jitter = rand::random::<u64>() % 200;
-                        let delay_ms =
-                            base_delay_ms * 2u64.pow(attempt) + jitter;
+                        let delay_ms = base_delay_ms * 2u64.pow(attempt) + jitter;
                         debug!(
                             dir = %dir_path.display(),
                             attempt = attempt + 1,
@@ -313,6 +341,16 @@ impl GitService {
         url.trim_start_matches("file://")
             .trim_start_matches("file:\\\\")
             .to_string()
+    }
+
+    fn local_repo_safe_directory_configs(source_path: &Path) -> Vec<String> {
+        vec![
+            format!("safe.directory={}", source_path.to_string_lossy()),
+            format!(
+                "safe.directory={}",
+                source_path.join(".git").to_string_lossy()
+            ),
+        ]
     }
 
     /// Checks if a URL is a GitLab URL.
@@ -442,12 +480,18 @@ impl GitService {
                     // For remote repos, use the URL as-is (no token embedding at clone time in this simplified version)
                     repo_url_owned.clone()
                 };
+                let git_configs = if Self::is_local_repo_url(&repo_url_owned) {
+                    Self::local_repo_safe_directory_configs(Path::new(&clone_url))
+                } else {
+                    vec![]
+                };
 
                 let bare_path_str = bare_path.to_string_lossy().to_string();
-                match Self::exec_git_or_throw(
+                match Self::exec_git_or_throw_with_configs(
                     &["clone", "--bare", &clone_url, &bare_path_str],
                     &repos_base,
                     None,
+                    &git_configs,
                 )
                 .await
                 {
@@ -480,7 +524,14 @@ impl GitService {
     /// Copies the source repo's remote origin URL to a bare repo so that push/PR
     /// operations target the correct host instead of a local path.
     async fn copy_source_remote_to_bare_repo(source_path: &Path, bare_repo_path: &Path) {
-        let result = match Self::exec_git(&["remote", "get-url", "origin"], source_path, None).await
+        let git_configs = Self::local_repo_safe_directory_configs(source_path);
+        let result = match Self::exec_git_with_configs(
+            &["remote", "get-url", "origin"],
+            source_path,
+            None,
+            &git_configs,
+        )
+        .await
         {
             Ok(r) => r,
             Err(_) => return,
@@ -545,12 +596,15 @@ impl GitService {
                 if let Some(ref url) = repo_url_owned {
                     if Self::is_local_repo_url(url) {
                         let repo_path = Self::local_repo_path(url);
+                        let git_configs =
+                            Self::local_repo_safe_directory_configs(Path::new(&repo_path));
                         if let Some(ref branch) = target_branch_owned {
                             let refspec = format!("{branch}:{branch}");
-                            let _ = Self::exec_git(
+                            let _ = Self::exec_git_with_configs(
                                 &["fetch", &repo_path, &refspec, "--force"],
                                 &bare_path,
                                 None,
+                                &git_configs,
                             )
                             .await;
                             debug!(target_branch = %branch, "Fetched local repo branch");
@@ -761,12 +815,14 @@ impl GitService {
                 // Re-track in memory
                 {
                     let mut worktrees = self.active_worktrees.write().await;
-                    worktrees.entry(task_id.to_string()).or_insert(WorktreeInfo {
-                        task_id: task_id.to_string(),
-                        worktree_path: worktree_path.clone(),
-                        branch_name: branch_name.clone(),
-                        bare_repo_path,
-                    });
+                    worktrees
+                        .entry(task_id.to_string())
+                        .or_insert(WorktreeInfo {
+                            task_id: task_id.to_string(),
+                            worktree_path: worktree_path.clone(),
+                            branch_name: branch_name.clone(),
+                            bare_repo_path,
+                        });
                 }
 
                 return Ok(SetupWorktreeResult {
@@ -779,9 +835,7 @@ impl GitService {
             } else {
                 // Invalid worktree, clean up
                 warn!(worktree = %worktree_path.display(), "Invalid worktree directory found, cleaning up");
-                if let Err(e) =
-                    Self::remove_directory_with_retry(&worktree_path, 5, 1000).await
-                {
+                if let Err(e) = Self::remove_directory_with_retry(&worktree_path, 5, 1000).await {
                     if Self::directory_exists(&worktree_path).await {
                         return Err(AppError::Internal(anyhow::anyhow!(
                             "Failed to clean up invalid worktree: {}. Error: {e}",
@@ -814,14 +868,16 @@ impl GitService {
         target_branch: &str,
     ) -> Result<(PathBuf, String, bool), AppError> {
         validate_task_id(task_id)?;
-        info!(task_id, repo_url, target_branch, "Creating worktree for task");
+        info!(
+            task_id,
+            repo_url, target_branch, "Creating worktree for task"
+        );
 
         let bare_repo_path = self.ensure_bare_repo(repo_url).await?;
         self.fetch_repo(&bare_repo_path, Some(target_branch), Some(repo_url))
             .await?;
 
-        let resolved_branch =
-            Self::resolve_target_branch(&bare_repo_path, target_branch).await?;
+        let resolved_branch = Self::resolve_target_branch(&bare_repo_path, target_branch).await?;
         let is_empty_repo = self.is_empty_repo(&bare_repo_path).await?;
 
         Self::ensure_dir(&self.config.worktrees_dir).await?;
@@ -1086,11 +1142,10 @@ impl GitService {
                             let _ = Self::exec_git(&["worktree", "prune"], &bp, None).await;
 
                             // Clean up worktree metadata
-                            let metadata_path =
-                                bp.join("worktrees").join(format!("task-{tid}"));
+                            let metadata_path = bp.join("worktrees").join(format!("task-{tid}"));
                             if Self::directory_exists(&metadata_path).await {
-                                let _ = Self::remove_directory_with_retry(&metadata_path, 3, 500)
-                                    .await;
+                                let _ =
+                                    Self::remove_directory_with_retry(&metadata_path, 3, 500).await;
                             }
                             Ok(())
                         }
@@ -1247,7 +1302,11 @@ impl GitService {
         )
         .await?;
 
-        info!(task_id, branch = branch.trim(), "Committed and pushed successfully");
+        info!(
+            task_id,
+            branch = branch.trim(),
+            "Committed and pushed successfully"
+        );
         Ok(())
     }
 
@@ -1335,8 +1394,7 @@ impl GitService {
         };
 
         // Get uncommitted changes
-        let status_result =
-            Self::exec_git(&["status", "--porcelain"], worktree_path, None).await?;
+        let status_result = Self::exec_git(&["status", "--porcelain"], worktree_path, None).await?;
 
         let mut file_statuses: HashMap<String, ChangeStatus> = HashMap::new();
 
@@ -1426,12 +1484,9 @@ impl GitService {
 
             // If numstat didn't return results, check uncommitted
             if additions == 0 && deletions == 0 && *status != ChangeStatus::Deleted {
-                let uncommitted = Self::exec_git(
-                    &["diff", "--numstat", "--", file_path],
-                    worktree_path,
-                    None,
-                )
-                .await?;
+                let uncommitted =
+                    Self::exec_git(&["diff", "--numstat", "--", file_path], worktree_path, None)
+                        .await?;
                 if uncommitted.exit_code == 0 && !uncommitted.stdout.is_empty() {
                     let parts: Vec<&str> = uncommitted.stdout.split('\t').collect();
                     if parts.len() >= 2 {
@@ -1490,8 +1545,7 @@ impl GitService {
 
         info!(
             total_files = changed_files.len(),
-            base_branch,
-            "getChangedFiles result"
+            base_branch, "getChangedFiles result"
         );
 
         Ok(changed_files)
@@ -1589,11 +1643,7 @@ impl GitService {
     // -----------------------------------------------------------------------
 
     /// Finds the bare repo path for a worktree using multiple strategies.
-    async fn find_bare_repo_path(
-        &self,
-        worktree_path: &Path,
-        task_id: &str,
-    ) -> Option<PathBuf> {
+    async fn find_bare_repo_path(&self, worktree_path: &Path, task_id: &str) -> Option<PathBuf> {
         // Strategy 1: active worktrees map
         {
             let worktrees = self.active_worktrees.read().await;
@@ -1618,8 +1668,7 @@ impl GitService {
         }
 
         // Strategy 3: git rev-parse
-        if let Ok(result) = Self::exec_git(&["rev-parse", "--git-dir"], worktree_path, None).await
-        {
+        if let Ok(result) = Self::exec_git(&["rev-parse", "--git-dir"], worktree_path, None).await {
             if result.exit_code == 0 {
                 let normalized = result.stdout.replace('\\', "/");
                 if let Some(idx) = normalized.rfind("/worktrees/") {
@@ -1662,8 +1711,7 @@ impl GitService {
 
     /// Checks if a worktree has uncommitted changes.
     pub async fn has_changes(&self, worktree_path: &Path) -> Result<bool, AppError> {
-        let result =
-            Self::exec_git(&["status", "--porcelain"], worktree_path, None).await?;
+        let result = Self::exec_git(&["status", "--porcelain"], worktree_path, None).await?;
         Ok(!result.stdout.is_empty())
     }
 
@@ -1745,10 +1793,12 @@ impl GitService {
             )));
         }
 
-        let source_remote_result = Self::exec_git(
+        let git_configs = Self::local_repo_safe_directory_configs(Path::new(&source_path));
+        let source_remote_result = Self::exec_git_with_configs(
             &["remote", "get-url", "origin"],
             Path::new(&source_path),
             None,
+            &git_configs,
         )
         .await?;
 

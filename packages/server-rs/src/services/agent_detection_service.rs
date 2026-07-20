@@ -64,6 +64,11 @@ fn get_cli_configs() -> Vec<CLIConfig> {
             version_args: &["--version"],
             models: vec![
                 AgentModel {
+                    id: "claude-opus-4-7".into(),
+                    name: "Claude Opus 4.7".into(),
+                    description: Some("Most capable -- complex reasoning & agentic coding".into()),
+                },
+                AgentModel {
                     id: "claude-opus-4-6".into(),
                     name: "Claude Opus 4.6".into(),
                     description: Some("Most intelligent -- complex tasks & agents".into()),
@@ -93,33 +98,7 @@ fn get_cli_configs() -> Vec<CLIConfig> {
             name: "Codex",
             command: "codex",
             version_args: &["--version"],
-            models: vec![
-                AgentModel {
-                    id: "gpt-5.3-codex".into(),
-                    name: "GPT-5.3 Codex".into(),
-                    description: Some("Most capable -- frontier coding + reasoning".into()),
-                },
-                AgentModel {
-                    id: "gpt-5.2-codex".into(),
-                    name: "GPT-5.2 Codex".into(),
-                    description: Some("Advanced agentic coding model".into()),
-                },
-                AgentModel {
-                    id: "gpt-5.1-codex-max".into(),
-                    name: "GPT-5.1 Codex Max".into(),
-                    description: Some("Long-horizon agentic coding".into()),
-                },
-                AgentModel {
-                    id: "gpt-5.2".into(),
-                    name: "GPT-5.2".into(),
-                    description: Some("Best general agentic model".into()),
-                },
-                AgentModel {
-                    id: "gpt-5.1-codex-mini".into(),
-                    name: "GPT-5.1 Codex Mini".into(),
-                    description: Some("Cost-effective, smaller model".into()),
-                },
-            ],
+            models: vec![],
             login_file: Some(".codex/auth.json"),
             install_indicator_files: &[".codex/version.json", ".codex/config.toml"],
             auth_env_vars: &["OPENAI_API_KEY"],
@@ -211,10 +190,7 @@ async fn find_executable(command: &str) -> Option<String> {
     let lookup = if cfg!(windows) { "where" } else { "which" };
 
     let output = tokio::time::timeout(DETECTION_TIMEOUT, async {
-        Command::new(lookup)
-            .arg(command)
-            .output()
-            .await
+        Command::new(lookup).arg(command).output().await
     })
     .await
     .ok()?
@@ -232,10 +208,30 @@ async fn find_executable(command: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn command_path_for_direct_spawn(exec_path: &str) -> String {
+    #[cfg(windows)]
+    {
+        let path = PathBuf::from(exec_path);
+        if path.extension().is_none() {
+            let cmd_path = path.with_extension("cmd");
+            if cmd_path.exists() {
+                return cmd_path.to_string_lossy().to_string();
+            }
+            let exe_path = path.with_extension("exe");
+            if exe_path.exists() {
+                return exe_path.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    exec_path.to_string()
+}
+
 /// Gets the version string from a CLI tool.
 async fn get_version(exec_path: &str, args: &[&str]) -> Option<String> {
+    let command_path = command_path_for_direct_spawn(exec_path);
     let output = tokio::time::timeout(DETECTION_TIMEOUT, async {
-        let mut cmd = Command::new(exec_path);
+        let mut cmd = Command::new(command_path);
         cmd.args(args);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000_u32); // CREATE_NO_WINDOW
@@ -251,6 +247,96 @@ async fn get_version(exec_path: &str, args: &[&str]) -> Option<String> {
         .next()
         .map(|l| l.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexModelCatalog {
+    models: Vec<CodexModelCatalogEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexModelCatalogEntry {
+    slug: String,
+    display_name: Option<String>,
+    description: Option<String>,
+    visibility: Option<String>,
+    priority: Option<i64>,
+}
+
+fn non_empty_string(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn parse_codex_model_catalog(json: &[u8]) -> Result<Vec<AgentModel>, serde_json::Error> {
+    let mut catalog: CodexModelCatalog = serde_json::from_slice(json)?;
+    catalog.models.sort_by(|a, b| {
+        a.priority
+            .unwrap_or(i64::MAX)
+            .cmp(&b.priority.unwrap_or(i64::MAX))
+            .then_with(|| a.slug.cmp(&b.slug))
+    });
+
+    Ok(catalog
+        .models
+        .into_iter()
+        .filter(|model| model.visibility.as_deref() == Some("list"))
+        .map(|model| {
+            let id = model.slug;
+            let name = non_empty_string(model.display_name).unwrap_or_else(|| id.clone());
+            AgentModel {
+                id,
+                name,
+                description: non_empty_string(model.description),
+            }
+        })
+        .collect())
+}
+
+async fn get_codex_models(exec_path: &str) -> Vec<AgentModel> {
+    let command_path = command_path_for_direct_spawn(exec_path);
+    let output = match tokio::time::timeout(DETECTION_TIMEOUT, async {
+        let mut cmd = Command::new(command_path);
+        cmd.args(["debug", "models"]);
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000_u32); // CREATE_NO_WINDOW
+        cmd.output().await
+    })
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            warn!(error = %e, "Failed to run Codex model catalog command");
+            return vec![];
+        }
+        Err(_) => {
+            warn!("Timed out while reading Codex model catalog");
+            return vec![];
+        }
+    };
+
+    if !output.status.success() {
+        warn!(
+            status = ?output.status.code(),
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "Codex model catalog command failed"
+        );
+        return vec![];
+    }
+
+    match parse_codex_model_catalog(&output.stdout) {
+        Ok(models) => models,
+        Err(e) => {
+            warn!(error = %e, "Failed to parse Codex model catalog");
+            vec![]
+        }
+    }
 }
 
 /// Resolves a credential path relative to the home directory.
@@ -287,7 +373,11 @@ fn file_exists(path: &PathBuf) -> bool {
 fn check_auth_fast(config: &CLIConfig) -> bool {
     // 1. Check environment variables first (instant)
     for env_var in config.auth_env_vars {
-        if std::env::var(env_var).ok().filter(|v| !v.is_empty()).is_some() {
+        if std::env::var(env_var)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .is_some()
+        {
             debug!(agent = config.id, env_var, "Auth detected via env var");
             return true;
         }
@@ -318,7 +408,11 @@ fn check_auth_fast(config: &CLIConfig) -> bool {
 
 /// Detects a single agent by its configuration.
 async fn detect_single_agent(config: &CLIConfig) -> DetectedAgent {
-    debug!(agent = config.id, command = config.command, "Detecting agent");
+    debug!(
+        agent = config.id,
+        command = config.command,
+        "Detecting agent"
+    );
 
     let exec_path = match find_executable(config.command).await {
         Some(path) => path,
@@ -342,12 +436,17 @@ async fn detect_single_agent(config: &CLIConfig) -> DetectedAgent {
     let authenticated = check_auth_fast(config);
 
     let version = version_future.await;
+    let models = if config.id == "codex" {
+        get_codex_models(&exec_path).await
+    } else {
+        config.models.clone()
+    };
 
     debug!(
         agent = config.id,
         ?version,
         authenticated,
-        model_count = config.models.len(),
+        model_count = models.len(),
         "Agent detection complete"
     );
 
@@ -357,7 +456,7 @@ async fn detect_single_agent(config: &CLIConfig) -> DetectedAgent {
         version,
         installed: true,
         authenticated,
-        models: config.models.clone(),
+        models,
     }
 }
 
@@ -528,7 +627,9 @@ async fn fetch_openrouter_agent_models(api_key: &str) -> Vec<AgentModel> {
 
     let client = reqwest::Client::new();
     let resp = match client
-        .get(format!("{OPENROUTER_BASE_URL}/models?supported_parameters=tools"))
+        .get(format!(
+            "{OPENROUTER_BASE_URL}/models?supported_parameters=tools"
+        ))
         .header("Authorization", format!("Bearer {api_key}"))
         .header("HTTP-Referer", "https://dash-agent.local")
         .header("X-Title", "dash-agent")
@@ -645,7 +746,9 @@ async fn detect_minimax(db: Option<&crate::db::Database>) -> DetectedAgent {
 }
 
 /// Fallback: reads the model from the OpenRouter secret metadata.
-fn get_openrouter_model_from_metadata(conn: &Connection) -> Result<Vec<AgentModel>, crate::error::AppError> {
+fn get_openrouter_model_from_metadata(
+    conn: &Connection,
+) -> Result<Vec<AgentModel>, crate::error::AppError> {
     let meta_str = crate::services::secrets_service::get_secret_metadata(
         conn,
         "ai_api_key",
@@ -655,9 +758,9 @@ fn get_openrouter_model_from_metadata(conn: &Connection) -> Result<Vec<AgentMode
     if let Some(meta_str) = meta_str {
         // metadata is stored as a JSON string
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&meta_str) {
-            let metadata = parsed.as_object().or_else(|| {
-                parsed.get("metadata").and_then(|m| m.as_object())
-            });
+            let metadata = parsed
+                .as_object()
+                .or_else(|| parsed.get("metadata").and_then(|m| m.as_object()));
 
             if let Some(metadata) = metadata {
                 let model_id = metadata.get("model").and_then(|v| v.as_str());
@@ -679,4 +782,89 @@ fn get_openrouter_model_from_metadata(conn: &Connection) -> Result<Vec<AgentMode
     }
 
     Ok(vec![])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_code_models_include_opus_4_7_first() {
+        let configs = get_cli_configs();
+        let claude = configs
+            .iter()
+            .find(|config| config.id == "claude-code")
+            .expect("claude-code config should exist");
+
+        let first_model = claude
+            .models
+            .first()
+            .expect("claude-code should expose available models");
+
+        assert_eq!(first_model.id, "claude-opus-4-7");
+        assert_eq!(first_model.name, "Claude Opus 4.7");
+    }
+
+    #[test]
+    fn copilot_models_are_not_changed_by_claude_api_model_addition() {
+        let configs = get_cli_configs();
+        let copilot = configs
+            .iter()
+            .find(|config| config.id == "copilot")
+            .expect("copilot config should exist");
+
+        assert!(!copilot
+            .models
+            .iter()
+            .any(|model| model.id == "claude-opus-4-7"));
+    }
+
+    #[test]
+    fn codex_models_are_loaded_from_cli_catalog_not_config() {
+        let configs = get_cli_configs();
+        let codex = configs
+            .iter()
+            .find(|config| config.id == "codex")
+            .expect("codex config should exist");
+
+        assert!(codex.models.is_empty());
+    }
+
+    #[test]
+    fn parses_codex_model_catalog_as_agent_models() {
+        let catalog = br#"{
+            "models": [
+                {
+                    "slug": "hidden-model",
+                    "display_name": "Hidden Model",
+                    "description": "Should not be shown",
+                    "visibility": "hide",
+                    "priority": 1
+                },
+                {
+                    "slug": "gpt-later",
+                    "display_name": "",
+                    "description": "Later model",
+                    "visibility": "list",
+                    "priority": 20
+                },
+                {
+                    "slug": "gpt-first",
+                    "display_name": "GPT First",
+                    "description": "First model",
+                    "visibility": "list",
+                    "priority": 10
+                }
+            ]
+        }"#;
+
+        let models = parse_codex_model_catalog(catalog).expect("catalog should parse");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-first");
+        assert_eq!(models[0].name, "GPT First");
+        assert_eq!(models[0].description.as_deref(), Some("First model"));
+        assert_eq!(models[1].id, "gpt-later");
+        assert_eq!(models[1].name, "gpt-later");
+    }
 }

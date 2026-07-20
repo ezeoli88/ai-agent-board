@@ -27,6 +27,8 @@ export type ConnectionStatus = SSEConnectionStatus;
 interface UseTaskSSEOptions {
   taskId: string;
   enabled?: boolean;
+  streamPath?: string;
+  invalidateQueries?: () => void;
   onStatusChange?: (status: TaskStatus) => void;
   onComplete?: (prUrl: string) => void;
   onError?: (message: string) => void;
@@ -48,6 +50,7 @@ interface ConnectOptions {
   onChatMessage?: (event: ChatMessageEvent) => void;
   onToolActivity?: (event: ToolActivityEvent) => void;
   invalidateQueries: () => void;
+  streamPath?: string;
 }
 
 // Connection manager class to handle SSE connections outside of React render cycle
@@ -76,7 +79,7 @@ function createSSEConnectionManager() {
   }
 
   function connect(options: ConnectOptions) {
-    const { taskId, enabled, onLog, onStatusChange, onComplete, onError, onTimeoutWarning, onPRComment, onChatMessage, onToolActivity, invalidateQueries } = options;
+    const { taskId, enabled, streamPath, onLog, onStatusChange, onComplete, onError, onTimeoutWarning, onPRComment, onChatMessage, onToolActivity, invalidateQueries } = options;
 
     if (!enabled || !taskId) return;
 
@@ -88,8 +91,11 @@ function createSSEConnectionManager() {
 
     const baseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
     const authToken = getAuthToken();
-    const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
-    const url = `${baseUrl}/api/tasks/${taskId}/logs${tokenParam}`;
+    const path = streamPath ?? `/api/tasks/${taskId}/logs`;
+    const tokenParam = authToken
+      ? `${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(authToken)}`
+      : '';
+    const url = `${baseUrl}${path}${tokenParam}`;
 
     try {
       const es = new EventSource(url);
@@ -250,7 +256,7 @@ function createSSEConnectionManager() {
 }
 
 export function useTaskSSE(options: UseTaskSSEOptions) {
-  const { taskId, enabled = true, onStatusChange, onComplete, onError, onTimeoutWarning, onPRComment, onChatMessage, onToolActivity } = options;
+  const { taskId, enabled = true, streamPath, invalidateQueries, onStatusChange, onComplete, onError, onTimeoutWarning, onPRComment, onChatMessage, onToolActivity } = options;
   const queryClient = useQueryClient();
 
   // Use Zustand store for logs persistence across tab switches
@@ -278,6 +284,7 @@ export function useTaskSSE(options: UseTaskSSEOptions) {
   const connectOptions = useMemo((): ConnectOptions => ({
     taskId,
     enabled,
+    streamPath,
     onLog: (log) => addTaskLog(taskId, log),
     onStatusChange: (status) => callbacksRef.current.onStatusChange?.(status),
     onComplete: (prUrl) => callbacksRef.current.onComplete?.(prUrl),
@@ -286,12 +293,12 @@ export function useTaskSSE(options: UseTaskSSEOptions) {
     onPRComment: (comment) => callbacksRef.current.onPRComment?.(comment),
     onChatMessage: (event) => callbacksRef.current.onChatMessage?.(event),
     onToolActivity: (event) => callbacksRef.current.onToolActivity?.(event),
-    invalidateQueries: () => {
+    invalidateQueries: invalidateQueries ?? (() => {
       queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
       queryClient.invalidateQueries({ queryKey: taskKeys.changes(taskId) });
-    },
-  }), [taskId, enabled, queryClient, addTaskLog]);
+    }),
+  }), [taskId, enabled, streamPath, queryClient, addTaskLog, invalidateQueries]);
 
   // Keep a ref to connectOptions so reconnect() always uses the latest value
   const connectOptionsRef = useRef(connectOptions);

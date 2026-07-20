@@ -44,9 +44,7 @@ pub async fn execute(args: Value, cwd: &Path) -> ToolResult {
 
     // Path traversal check
     if !path.starts_with(cwd) {
-        return ToolResult::err(format!(
-            "Error: Path escapes working directory: {raw_path}"
-        ));
+        return ToolResult::err(format!("Error: Path escapes working directory: {raw_path}"));
     }
 
     if !path.exists() {
@@ -63,7 +61,10 @@ pub async fn execute(args: Value, cwd: &Path) -> ToolResult {
         .get("start_line")
         .and_then(|v| v.as_u64())
         .map(|v| v.max(1) as usize);
-    let end_line = args.get("end_line").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let end_line = args
+        .get("end_line")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
 
     if start_line.is_some() || end_line.is_some() {
         let start = start_line.unwrap_or(1).saturating_sub(1);

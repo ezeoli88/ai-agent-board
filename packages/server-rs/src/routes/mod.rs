@@ -5,12 +5,14 @@
 //! - `repos` - Repository CRUD and learned patterns
 //! - `secrets` - Encrypted secret management (AI keys, GitHub/GitLab tokens)
 //! - `setup` - Application setup, agent detection, settings, OAuth
+//! - `specs` - Standalone spec-driven development demo workflows
 //! - `tasks` - Task CRUD and lifecycle management
 
 pub mod data;
 pub mod repos;
 pub mod secrets;
 pub mod setup;
+pub mod specs;
 pub mod tasks;
 
 use std::convert::Infallible;
@@ -36,6 +38,7 @@ use crate::AppState;
 /// - `/api/repos/*` - Repository management
 /// - `/api/secrets/*` - Secret management
 /// - `/api/setup/*` - Setup and configuration
+/// - `/api/specs/*` - Standalone spec-driven development demo workflows
 /// - `/api/tasks/*` - Task management
 pub fn api_router() -> Router<AppState> {
     Router::new()
@@ -45,6 +48,7 @@ pub fn api_router() -> Router<AppState> {
         .nest("/api/repos", repos::router())
         .nest("/api/secrets", secrets::router())
         .nest("/api/setup", setup::router())
+        .nest("/api/specs", specs::router())
         .nest("/api/tasks", tasks::router())
 }
 

@@ -4,12 +4,10 @@ import { Link, useLocation } from '@tanstack/react-router'
 import {
   ChevronLeft,
   ChevronRight,
-  LayoutDashboard,
-  LayoutGrid,
+  FileText,
   ListTodo,
   Settings,
-  Plus,
-  FolderGit2,
+  TestTube2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -19,10 +17,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import { FEATURE_FLAGS } from '@/config/features'
 import { useLayoutStore } from '@/stores/layout-store'
-import { TaskList, TaskFilters } from '@/features/tasks/components'
-import { RepoList, AddRepoDialog, RepoConfigDialog, useRepoStore } from '@/features/repos'
 
 interface NavItem {
   title: string
@@ -32,14 +28,23 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   {
-    title: 'Board',
-    href: '/board',
-    icon: LayoutGrid,
-  },
-  {
     title: 'Tasks',
-    href: '/tasks',
+    href: '/board',
     icon: ListTodo,
+  },
+  ...(FEATURE_FLAGS.qaDashboard
+    ? [
+        {
+          title: 'QA',
+          href: '/qa',
+          icon: TestTube2,
+        },
+      ]
+    : []),
+  {
+    title: 'Specs',
+    href: '/specs',
+    icon: FileText,
   },
 ]
 
@@ -58,7 +63,6 @@ interface SidebarProps {
 export function Sidebar({ className }: SidebarProps) {
   const { pathname } = useLocation()
   const { isSidebarCollapsed, toggleSidebar } = useLayoutStore()
-  const { openAddDialog } = useRepoStore()
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -143,71 +147,7 @@ export function Sidebar({ className }: SidebarProps) {
           })}
         </nav>
 
-        {/* Repos and Tasks section - only show when expanded */}
-        {!isSidebarCollapsed && (
-          <div className="flex flex-1 flex-col overflow-hidden">
-            {/* Repos Section */}
-            <div className="border-t border-border">
-              <div className="flex items-center justify-between px-4 py-2">
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  Repositorios
-                </h3>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={openAddDialog}
-                    >
-                      <Plus className="h-4 w-4" />
-                      <span className="sr-only">Agregar repositorio</span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Agregar repositorio</TooltipContent>
-                </Tooltip>
-              </div>
-              <div className="px-2 pb-2">
-                <RepoList compact />
-              </div>
-            </div>
-
-            {/* Tasks Section */}
-            <div className="flex flex-1 flex-col border-t border-border overflow-hidden">
-              {/* Compact filters */}
-              <div className="p-3 border-b border-border">
-                <TaskFilters compact />
-              </div>
-
-              {/* Scrollable task list */}
-              <ScrollArea className="flex-1">
-                <div className="p-2">
-                  <TaskList compact />
-                </div>
-              </ScrollArea>
-            </div>
-          </div>
-        )}
-
-        {/* Collapsed repos button */}
-        {isSidebarCollapsed && (
-          <div className="p-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-10 w-10"
-                  onClick={openAddDialog}
-                >
-                  <FolderGit2 className="h-5 w-5" />
-                  <span className="sr-only">Repositorios</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Repositorios</TooltipContent>
-            </Tooltip>
-          </div>
-        )}
+        <div className="flex-1" />
 
         {/* Bottom navigation */}
         <div className="border-t border-border p-2 mt-auto">
@@ -258,9 +198,6 @@ export function Sidebar({ className }: SidebarProps) {
         </div>
       </aside>
 
-      {/* Dialogs */}
-      <AddRepoDialog />
-      <RepoConfigDialog />
     </TooltipProvider>
   )
 }

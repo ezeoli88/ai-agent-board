@@ -91,10 +91,7 @@ impl<'a> McpServer<'a> {
             }
         };
 
-        let arguments = params
-            .get("arguments")
-            .cloned()
-            .unwrap_or(json!({}));
+        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
         debug!(tool = %tool_name, "Calling MCP tool");
 

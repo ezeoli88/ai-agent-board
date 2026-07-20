@@ -106,7 +106,9 @@ impl From<GHRepoResponse> for GitHubRepository {
             default_branch: r.default_branch,
             private: r.private,
             language: r.language,
-            updated_at: r.updated_at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            updated_at: r
+                .updated_at
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
             stargazers_count: r.stargazers_count.unwrap_or(0),
         }
     }
@@ -173,15 +175,12 @@ fn github_client(token: &str) -> Result<Client, AppError> {
         reqwest::header::ACCEPT,
         "application/vnd.github.v3+json".parse().unwrap(),
     );
-    headers.insert(
-        reqwest::header::USER_AGENT,
-        "agent-board".parse().unwrap(),
-    );
+    headers.insert(reqwest::header::USER_AGENT, "agent-board".parse().unwrap());
     headers.insert(
         reqwest::header::AUTHORIZATION,
-        format!("Bearer {token}").parse().map_err(|_| {
-            AppError::Validation("Invalid GitHub token format".into())
-        })?,
+        format!("Bearer {token}")
+            .parse()
+            .map_err(|_| AppError::Validation("Invalid GitHub token format".into()))?,
     );
 
     Client::builder()
@@ -260,11 +259,10 @@ async fn search_repos(
         "https://api.github.com/search/repositories?q={encoded_query}&page={page}&per_page={per_page}&sort=updated&order=desc"
     );
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("GitHub search request failed: {e}")))?;
+    let response =
+        client.get(&url).send().await.map_err(|e| {
+            AppError::Internal(anyhow::anyhow!("GitHub search request failed: {e}"))
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -280,9 +278,18 @@ async fn search_repos(
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse search response: {e}")))?;
 
-    let repos: Vec<GitHubRepository> = search_response.items.into_iter().map(|r| r.into()).collect();
+    let repos: Vec<GitHubRepository> = search_response
+        .items
+        .into_iter()
+        .map(|r| r.into())
+        .collect();
 
-    info!(query, count = repos.len(), total = search_response.total_count, "Search completed");
+    info!(
+        query,
+        count = repos.len(),
+        total = search_response.total_count,
+        "Search completed"
+    );
 
     Ok(GitHubReposResponse {
         repos,
@@ -347,11 +354,7 @@ pub async fn validate_repo_url(token: &str, url: &str) -> Result<RepoValidation,
 }
 
 /// Gets information about a specific repository.
-pub async fn get_repo(
-    token: &str,
-    owner: &str,
-    repo: &str,
-) -> Result<GitHubRepository, AppError> {
+pub async fn get_repo(token: &str, owner: &str, repo: &str) -> Result<GitHubRepository, AppError> {
     debug!(owner, repo, "Getting repository info");
 
     let client = github_client(token)?;
@@ -432,17 +435,11 @@ pub async fn create_pull_request(
 }
 
 /// Gets the branches of a repository.
-pub async fn get_branches(
-    token: &str,
-    owner: &str,
-    repo: &str,
-) -> Result<Vec<String>, AppError> {
+pub async fn get_branches(token: &str, owner: &str, repo: &str) -> Result<Vec<String>, AppError> {
     debug!(owner, repo, "Getting repository branches");
 
     let client = github_client(token)?;
-    let url = format!(
-        "https://api.github.com/repos/{owner}/{repo}/branches?per_page=100"
-    );
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/branches?per_page=100");
 
     let response = client
         .get(&url)
@@ -497,17 +494,17 @@ pub async fn get_pr_comments(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("GitHub API request failed: {e}")))?;
 
     if response.status().is_success() {
-        let issue_comments: Vec<GHIssueComment> = response
-            .json()
-            .await
-            .unwrap_or_default();
+        let issue_comments: Vec<GHIssueComment> = response.json().await.unwrap_or_default();
 
         for c in issue_comments {
             comments.push(PRComment {
                 id: c.id,
                 body: c.body.unwrap_or_default(),
                 author: PRCommentAuthor {
-                    login: c.user.as_ref().map_or("unknown".to_string(), |u| u.login.clone()),
+                    login: c
+                        .user
+                        .as_ref()
+                        .map_or("unknown".to_string(), |u| u.login.clone()),
                     avatar_url: c.user.as_ref().and_then(|u| u.avatar_url.clone()),
                 },
                 created_at: c.created_at,
@@ -535,17 +532,17 @@ pub async fn get_pr_comments(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("GitHub API request failed: {e}")))?;
 
     if response.status().is_success() {
-        let review_comments: Vec<GHReviewComment> = response
-            .json()
-            .await
-            .unwrap_or_default();
+        let review_comments: Vec<GHReviewComment> = response.json().await.unwrap_or_default();
 
         for c in review_comments {
             comments.push(PRComment {
                 id: c.id,
                 body: c.body.unwrap_or_default(),
                 author: PRCommentAuthor {
-                    login: c.user.as_ref().map_or("unknown".to_string(), |u| u.login.clone()),
+                    login: c
+                        .user
+                        .as_ref()
+                        .map_or("unknown".to_string(), |u| u.login.clone()),
                     avatar_url: c.user.as_ref().and_then(|u| u.avatar_url.clone()),
                 },
                 created_at: c.created_at,

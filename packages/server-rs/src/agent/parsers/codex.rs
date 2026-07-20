@@ -13,15 +13,70 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
     let parsed: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => {
-            emit_log(emitter, task_id, "info", &format!("CLI: {}", truncate(line, 1000))).await;
+            emit_log(
+                emitter,
+                task_id,
+                "info",
+                &format!("CLI: {}", truncate(line, 1000)),
+            )
+            .await;
             return;
         }
     };
 
     let event_type = parsed.get("type").and_then(Value::as_str).unwrap_or("");
 
+    match event_type {
+        "thread.started" => {
+            let thread_id = parsed
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .map(|id| truncate(id, 8));
+            let message = thread_id
+                .map(|id| format!("Codex thread started ({id})"))
+                .unwrap_or_else(|| "Codex thread started".to_string());
+            emit_log(emitter, task_id, "info", &message).await;
+            emit_chat_message(emitter, task_id, "system", &message).await;
+            return;
+        }
+        "turn.started" => {
+            let message = "Codex turn started";
+            emit_log(emitter, task_id, "info", message).await;
+            emit_chat_message(emitter, task_id, "system", message).await;
+            return;
+        }
+        "turn.completed" => {
+            let usage = format_usage(parsed.get("usage"));
+            let message = if usage.is_empty() {
+                "Codex turn completed".to_string()
+            } else {
+                format!("Codex turn completed ({usage})")
+            };
+            emit_log(emitter, task_id, "info", &message).await;
+            emit_chat_message(emitter, task_id, "system", &message).await;
+            return;
+        }
+        "turn.failed" => {
+            let error_msg = extract_error_message(&parsed).unwrap_or("unknown error");
+            let message = format!("Codex turn failed: {}", truncate(error_msg, 1000));
+            emit_log(emitter, task_id, "error", &message).await;
+            emit_chat_message(emitter, task_id, "system", &message).await;
+            return;
+        }
+        "error" => {
+            let error_msg = extract_error_message(&parsed).unwrap_or("unknown error");
+            let message = format!("CLI error: {}", truncate(error_msg, 1000));
+            emit_log(emitter, task_id, "error", &message).await;
+            emit_chat_message(emitter, task_id, "system", &message).await;
+            return;
+        }
+        _ => {}
+    }
+
     // Handle item.started / item.completed events (actual Codex --json format)
-    if (event_type == "item.completed" || event_type == "item.started") && parsed.get("item").is_some() {
+    if (event_type == "item.completed" || event_type == "item.started")
+        && parsed.get("item").is_some()
+    {
         let item = &parsed["item"];
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
 
@@ -33,20 +88,24 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
                     .and_then(Value::as_str)
                     .map(String::from)
                     .or_else(|| {
-                        item.get("content")
-                            .and_then(Value::as_array)
-                            .map(|blocks| {
-                                blocks
-                                    .iter()
-                                    .filter_map(|b| b.get("text").and_then(Value::as_str))
-                                    .collect::<Vec<_>>()
-                                    .join("")
-                            })
+                        item.get("content").and_then(Value::as_array).map(|blocks| {
+                            blocks
+                                .iter()
+                                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                                .collect::<Vec<_>>()
+                                .join("")
+                        })
                     });
 
                 if let Some(text) = text {
                     if !text.is_empty() {
-                        emit_log(emitter, task_id, "info", &format!("Agent: {}", truncate(&text, 1000))).await;
+                        emit_log(
+                            emitter,
+                            task_id,
+                            "info",
+                            &format!("Agent: {}", truncate(&text, 1000)),
+                        )
+                        .await;
                         emit_chat_message(emitter, task_id, "assistant", &text).await;
                     }
                 } else if event_type == "item.started" {
@@ -57,7 +116,13 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
             // Reasoning -- show internal chain-of-thought
             "reasoning" => {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    emit_log(emitter, task_id, "info", &format!("reasoning: {}", truncate(text, 1000))).await;
+                    emit_log(
+                        emitter,
+                        task_id,
+                        "info",
+                        &format!("reasoning: {}", truncate(text, 1000)),
+                    )
+                    .await;
                     emit_chat_message(emitter, task_id, "system", text).await;
                 }
             }
@@ -69,13 +134,16 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
                     .and_then(Value::as_str)
                     .unwrap_or("unknown command");
                 let summary = truncate(command, 100);
-                let item_id = item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
 
                 if event_type == "item.started" {
-                    emit_log(emitter, task_id, "info", &format!("Tool: {}", truncate(command, 200))).await;
+                    emit_log(
+                        emitter,
+                        task_id,
+                        "info",
+                        &format!("Tool: {}", truncate(command, 200)),
+                    )
+                    .await;
                     emit_tool_activity(emitter, task_id, item_id, "Bash", summary, "running").await;
                 } else {
                     // item.completed
@@ -93,7 +161,9 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
                         &format!(
                             "Tool: {} (exit {})",
                             truncate(command, 200),
-                            exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+                            exit_code
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "?".to_string())
                         ),
                     )
                     .await;
@@ -111,9 +181,9 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
                     .get("arguments")
                     .and_then(Value::as_str)
                     .and_then(|args_str| {
-                        serde_json::from_str::<Value>(args_str).ok().and_then(|args| {
-                            extract_tool_key(&args)
-                        })
+                        serde_json::from_str::<Value>(args_str)
+                            .ok()
+                            .and_then(|args| extract_tool_key(&args))
                     })
                     .unwrap_or_default();
 
@@ -122,7 +192,13 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
                 } else {
                     format!(": {detail}")
                 };
-                emit_log(emitter, task_id, "info", &format!("Tool: {tool_name}{log_detail}")).await;
+                emit_log(
+                    emitter,
+                    task_id,
+                    "info",
+                    &format!("Tool: {tool_name}{log_detail}"),
+                )
+                .await;
 
                 // Emit tool activity on item.started
                 if event_type == "item.started" {
@@ -148,18 +224,22 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
             // Other item types with text
             _ => {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    let label = if item_type.is_empty() { "Output" } else { item_type };
-                    emit_log(emitter, task_id, "info", &format!("{label}: {}", truncate(text, 500))).await;
+                    let label = if item_type.is_empty() {
+                        "Output"
+                    } else {
+                        item_type
+                    };
+                    emit_log(
+                        emitter,
+                        task_id,
+                        "info",
+                        &format!("{label}: {}", truncate(text, 500)),
+                    )
+                    .await;
                 }
                 // Skip noisy events without useful content
             }
         }
-        return;
-    }
-
-    // turn.completed -- useful milestone
-    if event_type == "turn.completed" {
-        emit_log(emitter, task_id, "info", "Turn completed").await;
         return;
     }
 
@@ -171,9 +251,19 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
         .and_then(Value::as_str);
 
     if let Some(msg) = message_text {
-        emit_log(emitter, task_id, "info", &format!("Agent: {}", truncate(msg, 1000))).await;
+        emit_log(
+            emitter,
+            task_id,
+            "info",
+            &format!("Agent: {}", truncate(msg, 1000)),
+        )
+        .await;
     } else if !event_type.is_empty() {
-        debug!(task_id, "Codex event ({event_type}): {}", truncate(line, 200));
+        debug!(
+            task_id,
+            "Codex event ({event_type}): {}",
+            truncate(line, 200)
+        );
     }
 }
 
@@ -185,6 +275,41 @@ fn extract_tool_key(args: &Value) -> Option<String> {
         }
     }
     None
+}
+
+fn extract_error_message(value: &Value) -> Option<&str> {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .get("error")
+                .and_then(|error| error.get("error"))
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+        })
+}
+
+fn format_usage(usage: Option<&Value>) -> String {
+    let Some(usage) = usage else {
+        return String::new();
+    };
+
+    let input = usage.get("input_tokens").and_then(Value::as_u64);
+    let output = usage.get("output_tokens").and_then(Value::as_u64);
+
+    match (input, output) {
+        (Some(input), Some(output)) => format!("{input} in, {output} out"),
+        (Some(input), None) => format!("{input} input tokens"),
+        (None, Some(output)) => format!("{output} output tokens"),
+        (None, None) => String::new(),
+    }
 }
 
 fn truncate(s: &str, max_len: usize) -> &str {
@@ -219,6 +344,46 @@ async fn emit_chat_message(emitter: &SSEEmitter, task_id: &str, role: &str, cont
             },
         )
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::SSEEventType;
+
+    #[tokio::test]
+    async fn emits_visible_chat_for_codex_turn_lifecycle() {
+        let emitter = SSEEmitter::new();
+        let task_id = "task-1";
+
+        parse(
+            r#"{"type":"thread.started","thread_id":"019e64a4-5e73-71a1-a194-3708d26e8dcf"}"#,
+            &emitter,
+            task_id,
+        )
+        .await;
+        parse(r#"{"type":"turn.started"}"#, &emitter, task_id).await;
+        parse(
+            r#"{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":3}}"#,
+            &emitter,
+            task_id,
+        )
+        .await;
+
+        let history = emitter.get_history(task_id).await;
+        let chat_messages = history
+            .iter()
+            .filter(|event| event.event_type == SSEEventType::ChatMessage)
+            .count();
+
+        assert_eq!(chat_messages, 3);
+        assert!(history.iter().any(|event| {
+            event.event_type == SSEEventType::Log
+                && event.data["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("Codex turn completed"))
+        }));
+    }
 }
 
 async fn emit_tool_activity(

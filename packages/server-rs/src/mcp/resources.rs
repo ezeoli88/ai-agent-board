@@ -120,13 +120,8 @@ async fn read_task(state: &AppState, uri: &str, task_id: &str) -> Value {
     match result {
         Ok(data) => resource_contents(&uri, &data),
         Err(AppError::NotFound(_)) => {
-            let id = uri
-                .strip_prefix("agentboard://tasks/")
-                .unwrap_or("unknown");
-            resource_contents(
-                &uri,
-                &json!({ "error": "Task not found", "id": id }),
-            )
+            let id = uri.strip_prefix("agentboard://tasks/").unwrap_or("unknown");
+            resource_contents(&uri, &json!({ "error": "Task not found", "id": id }))
         }
         Err(e) => resource_contents(
             &uri,

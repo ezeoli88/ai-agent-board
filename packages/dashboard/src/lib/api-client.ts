@@ -2,12 +2,22 @@ import type {
   Task,
   CreateTaskInput,
   UpdateTaskInput,
+  CreateQaRunInput,
+  QaRun,
+  QaBoardItem,
   TaskChangesResponse,
   RequestChangesResponse,
   PRMergedResponse,
   PRClosedResponse,
   PRCommentsResponse,
 } from "@/features/tasks/types";
+import type {
+  Spec,
+  CreateSpecInput,
+  UpdateSpecInput,
+  AnswerClarificationsInput,
+  CreateTasksFromSpecResponse,
+} from "@/features/specs/types";
 import type { ActionResponse, CleanupWorktreeResponse } from "@/types/api";
 import { getAuthToken } from "./auth";
 
@@ -47,6 +57,22 @@ export class ApiClientError extends Error {
 interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   params?: Record<string, string | number | boolean | undefined>;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function normalizeSpec(spec: Spec): Spec {
+  const raw = spec as Spec & Record<string, unknown>;
+  return {
+    ...spec,
+    clarification_questions: normalizeStringArray(raw.clarification_questions),
+    clarification_answers: normalizeStringArray(raw.clarification_answers),
+    task_ids: normalizeStringArray(raw.task_ids),
+  };
 }
 
 // Build URL with query parameters
@@ -307,12 +333,77 @@ export const tasksApi = {
   getChanges: (id: string): Promise<TaskChangesResponse> =>
     apiClient.get<TaskChangesResponse>(`/tasks/${id}/changes`),
 
+  getQARuns: (id: string): Promise<QaRun[]> =>
+    apiClient.get<QaRun[]>(`/tasks/${id}/qa-runs`),
+
+  getQARun: (runId: string): Promise<QaRun> =>
+    apiClient.get<QaRun>(`/tasks/qa-runs/${runId}`),
+
+  getQABoard: (filters?: { repository_id?: string }): Promise<QaBoardItem[]> =>
+    apiClient.get<QaBoardItem[]>("/tasks/qa-board/items", {
+      params: { repository_id: filters?.repository_id },
+    }),
+
+  startQARun: (id: string, data: CreateQaRunInput): Promise<QaRun> =>
+    apiClient.post<QaRun>(`/tasks/${id}/qa-runs`, data),
+
   cleanupWorktree: (id: string): Promise<CleanupWorktreeResponse> =>
     apiClient.post<CleanupWorktreeResponse>(`/tasks/${id}/cleanup-worktree`),
 
   // PR comments
   getPRComments: (id: string): Promise<PRCommentsResponse> =>
     apiClient.get<PRCommentsResponse>(`/tasks/${id}/pr-comments`),
+};
+
+export const specsApi = {
+  getAll: (filters?: { repository_id?: string }) => {
+    const params: Record<string, string | undefined> = {};
+    if (filters?.repository_id) {
+      params.repository_id = filters.repository_id;
+    }
+    return apiClient.get<Spec[]>("/specs", { params }).then((specs) => specs.map(normalizeSpec));
+  },
+
+  getById: (id: string) => apiClient.get<Spec>(`/specs/${id}`).then(normalizeSpec),
+
+  create: (data: CreateSpecInput) => apiClient.post<Spec>("/specs", data).then(normalizeSpec),
+
+  update: (id: string, data: UpdateSpecInput) =>
+    apiClient.patch<Spec>(`/specs/${id}`, data).then(normalizeSpec),
+
+  delete: (id: string) => apiClient.delete<void>(`/specs/${id}`),
+
+  generateSpec: (id: string) =>
+    apiClient.post<Spec>(`/specs/${id}/generate-spec`).then(normalizeSpec),
+
+  answerClarifications: (id: string, data: AnswerClarificationsInput) =>
+    apiClient.post<Spec>(`/specs/${id}/answer-clarifications`, data).then(normalizeSpec),
+
+  getAgentStatus: (id: string) =>
+    apiClient.get<{ running: boolean }>(`/specs/${id}/agent-status`),
+
+  sendFeedback: (id: string, message: string) =>
+    apiClient.post<{ status: string }>(`/specs/${id}/feedback`, { message }),
+
+  approveSpec: (id: string, content?: string) =>
+    apiClient.post<Spec>(`/specs/${id}/approve-spec`, { content }).then(normalizeSpec),
+
+  generatePlan: (id: string) =>
+    apiClient.post<Spec>(`/specs/${id}/generate-plan`).then(normalizeSpec),
+
+  approvePlan: (id: string, content?: string) =>
+    apiClient.post<Spec>(`/specs/${id}/approve-plan`, { content }).then(normalizeSpec),
+
+  generateTasks: (id: string) =>
+    apiClient.post<Spec>(`/specs/${id}/generate-tasks`).then(normalizeSpec),
+
+  approveTasks: (id: string, content?: string) =>
+    apiClient.post<Spec>(`/specs/${id}/approve-tasks`, { content }).then(normalizeSpec),
+
+  createTasks: (id: string) =>
+    apiClient
+      .post<CreateTasksFromSpecResponse>(`/specs/${id}/create-tasks`)
+      .then((response) => ({ ...response, spec: normalizeSpec(response.spec) })),
 };
 
 // Export types for consumers

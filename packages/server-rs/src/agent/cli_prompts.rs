@@ -67,6 +67,20 @@ fn build_repository_section(repo_context: &str) -> String {
     format!("\n{repo_context}\n")
 }
 
+/// Appends browser-verification guidance for Claude Code when Chrome MCP is enabled.
+pub fn append_chrome_mcp_instructions(mut prompt: String) -> String {
+    prompt.push_str(
+        r#"
+
+## Browser Verification via Chrome MCP
+- Chrome DevTools MCP tools are available as `mcp__chrome-devtools__*`.
+- Use them when the task requires checking browser behavior, rendered UI, console errors, screenshots, DOM state, or network failures.
+- Inspect only already-running target URLs that are provided by the task or repository context.
+- Do not start dev servers, run test/build commands, or launch long-running processes; if no target URL is available, say that browser verification was skipped."#,
+    );
+    prompt
+}
+
 /// Builds the main task prompt for a normal (non-resume, non-plan) execution.
 ///
 /// Consolidates all context into a single comprehensive prompt for CLI agent execution.
@@ -91,7 +105,9 @@ pub fn build_task_prompt(
         )
     };
 
-    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let repo_section = repo_context
+        .map(build_repository_section)
+        .unwrap_or_default();
     let workspace_section = build_workspace_section(workspace_path);
     let agent_instructions = build_agent_specific_instructions(agent_type);
 
@@ -130,7 +146,9 @@ pub fn build_resume_prompt(
     agent_type: Option<&str>,
     workspace_path: Option<&str>,
 ) -> String {
-    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let repo_section = repo_context
+        .map(build_repository_section)
+        .unwrap_or_default();
     let workspace_section = build_workspace_section(workspace_path);
     let agent_instructions = build_agent_specific_instructions(agent_type);
 
@@ -171,7 +189,9 @@ pub fn build_empty_repo_prompt(
     agent_type: Option<&str>,
     workspace_path: Option<&str>,
 ) -> String {
-    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let repo_section = repo_context
+        .map(build_repository_section)
+        .unwrap_or_default();
     let workspace_section = build_workspace_section(workspace_path);
     let agent_instructions = build_agent_specific_instructions(agent_type);
 
@@ -226,7 +246,9 @@ pub fn build_plan_only_prompt(
         )
     };
 
-    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let repo_section = repo_context
+        .map(build_repository_section)
+        .unwrap_or_default();
     let workspace_section = build_workspace_section(workspace_path);
 
     format!(
@@ -274,7 +296,9 @@ pub fn build_implementation_prompt(
     agent_type: Option<&str>,
     workspace_path: Option<&str>,
 ) -> String {
-    let repo_section = repo_context.map(build_repository_section).unwrap_or_default();
+    let repo_section = repo_context
+        .map(build_repository_section)
+        .unwrap_or_default();
     let workspace_section = build_workspace_section(workspace_path);
     let agent_instructions = build_agent_specific_instructions(agent_type);
 
@@ -330,7 +354,14 @@ mod tests {
 
     #[test]
     fn resume_prompt_includes_feedback() {
-        let prompt = build_resume_prompt("Fix bug", "Spec", "Please add error handling", None, None, None);
+        let prompt = build_resume_prompt(
+            "Fix bug",
+            "Spec",
+            "Please add error handling",
+            None,
+            None,
+            None,
+        );
         assert!(prompt.contains("Please add error handling"));
         assert!(prompt.contains("Reviewer Feedback"));
     }
@@ -349,6 +380,14 @@ mod tests {
     }
 
     #[test]
+    fn chrome_mcp_instructions_are_appended() {
+        let prompt = append_chrome_mcp_instructions("Base prompt".to_string());
+        assert!(prompt.contains("Browser Verification via Chrome MCP"));
+        assert!(prompt.contains("mcp__chrome-devtools__*"));
+        assert!(prompt.contains("Do not start dev servers"));
+    }
+
+    #[test]
     fn plan_only_prompt_forbids_file_changes() {
         let prompt = build_plan_only_prompt("Task", "Spec", &[], None, None);
         assert!(prompt.contains("PLAN-ONLY mode"));
@@ -357,7 +396,14 @@ mod tests {
 
     #[test]
     fn implementation_prompt_includes_plan() {
-        let prompt = build_implementation_prompt("Task", "Spec", "1. Create file\n2. Edit file", None, None, None);
+        let prompt = build_implementation_prompt(
+            "Task",
+            "Spec",
+            "1. Create file\n2. Edit file",
+            None,
+            None,
+            None,
+        );
         assert!(prompt.contains("Approved Implementation Plan"));
         assert!(prompt.contains("1. Create file"));
     }

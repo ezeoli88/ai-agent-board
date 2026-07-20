@@ -104,10 +104,7 @@ fn detect_auth_error(agent_type: &str, stderr_lines: &[String]) -> Option<(Strin
     let full_stderr = stderr_lines.join("\n");
     for rule in agent_rules {
         if rule.pattern.is_match(&full_stderr) {
-            return Some((
-                rule.message.to_string(),
-                rule.help_url.to_string(),
-            ));
+            return Some((rule.message.to_string(), rule.help_url.to_string()));
         }
     }
 
@@ -122,23 +119,32 @@ pub fn build_cli_command(
     prompt: &str,
     model: Option<&str>,
     plan_only: bool,
+    resume_session_id: Option<&str>,
+    chrome_mcp_enabled: bool,
 ) -> CLICommand {
     match agent_type {
         AgentType::ClaudeCode => {
             // Claude Code: prompt is sent via stdin to avoid Windows command-line issues
-            let allowed_tools = if plan_only {
-                "Read,Bash,Grep,Glob"
+            let mut allowed_tools = if plan_only {
+                vec!["Read", "Bash", "Grep", "Glob"]
             } else {
-                "Read,Edit,Bash,Write"
+                vec!["Read", "Edit", "Bash", "Write"]
             };
+            if chrome_mcp_enabled {
+                allowed_tools.push("mcp__chrome-devtools__*");
+            }
             let mut args = vec![
                 "-p".to_string(),
                 "--output-format".to_string(),
                 "stream-json".to_string(),
                 "--verbose".to_string(),
                 "--allowedTools".to_string(),
-                allowed_tools.to_string(),
+                allowed_tools.join(","),
             ];
+            if let Some(session_id) = resume_session_id.filter(|id| !id.trim().is_empty()) {
+                args.push("--resume".to_string());
+                args.push(session_id.to_string());
+            }
             if let Some(m) = model {
                 args.push("--model".to_string());
                 args.push(m.to_string());
@@ -154,13 +160,30 @@ pub fn build_cli_command(
         }
 
         AgentType::Codex => {
-            // Codex: exec subcommand with danger-full-access sandbox
-            let mut args = vec![
-                "exec".to_string(),
+            // Codex: first turn uses `exec`; follow-up turns use `exec resume`.
+            let mut args = vec!["exec".to_string()];
+            if let Some(session_id) = resume_session_id.filter(|id| !id.trim().is_empty()) {
+                args.push("resume".to_string());
+                args.push("--json".to_string());
+                if let Some(m) = model {
+                    args.push("-m".to_string());
+                    args.push(m.to_string());
+                }
+                args.push(session_id.to_string());
+                args.push(prompt.to_string());
+                return CLICommand {
+                    command: "codex".to_string(),
+                    args,
+                    use_stdin: false,
+                    close_stdin_after_prompt: false,
+                };
+            }
+
+            args.extend([
                 "--json".to_string(),
                 "--sandbox".to_string(),
                 "danger-full-access".to_string(),
-            ];
+            ]);
             if let Some(m) = model {
                 args.push("-m".to_string());
                 args.push(m.to_string());
@@ -223,6 +246,37 @@ pub fn build_cli_command(
         // MiniMax is API-based — it uses APIAgentRunner, not CLI commands.
         AgentType::MiniMax => unreachable!("MiniMax is API-based, not CLI"),
     }
+}
+
+#[cfg(windows)]
+fn escape_powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(windows)]
+fn build_codex_powershell_command(
+    prompt_path: &std::path::Path,
+    model: Option<&str>,
+    resume_session_id: Option<&str>,
+) -> String {
+    let escaped_path = escape_powershell_single_quoted(&prompt_path.to_string_lossy());
+    let model_arg = model
+        .map(|m| format!("-m '{}' ", escape_powershell_single_quoted(m)))
+        .unwrap_or_default();
+    let command = if let Some(session_id) = resume_session_id.filter(|id| !id.trim().is_empty()) {
+        format!(
+            "exec resume --json {model_arg}'{}' -",
+            escape_powershell_single_quoted(session_id)
+        )
+    } else {
+        format!("exec --json --sandbox danger-full-access {model_arg}-")
+    };
+
+    format!(
+        "$p = [IO.File]::ReadAllText('{escaped_path}'); \
+         $p | & codex.cmd {command}; \
+         if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }} else {{ exit 1 }}"
+    )
 }
 
 /// Kills a process and all its children.
@@ -305,6 +359,7 @@ impl CLIAgentRunner {
                 error: Some("Agent is already running".to_string()),
                 summary: None,
                 changes_data: None,
+                session_id: None,
             });
         }
 
@@ -348,6 +403,8 @@ impl CLIAgentRunner {
             &self.options.prompt,
             self.options.model.as_deref(),
             self.options.plan_only,
+            self.options.resume_session_id.as_deref(),
+            self.options.chrome_mcp_enabled,
         );
 
         info!(
@@ -365,13 +422,10 @@ impl CLIAgentRunner {
         // For Codex on Windows, cmd.exe can't handle multi-line prompts as arguments.
         // Workaround (matching the TS server): write prompt to a temp file and use
         // PowerShell to read it and pipe it via stdin.
-        let needs_powershell_workaround = cfg!(windows)
-            && self.options.agent_type == AgentType::Codex;
-        let needs_shell = cfg!(windows)
-            && matches!(
-                cli_command.command.as_str(),
-                "gemini" | "copilot"
-            );
+        let needs_powershell_workaround =
+            cfg!(windows) && self.options.agent_type == AgentType::Codex;
+        let needs_shell =
+            cfg!(windows) && matches!(cli_command.command.as_str(), "gemini" | "copilot");
 
         // Track temp file for cleanup
         let mut prompt_file_path: Option<std::path::PathBuf> = None;
@@ -392,22 +446,15 @@ impl CLIAgentRunner {
                         error: Some(format!("Failed to write prompt temp file: {e}")),
                         summary: None,
                         changes_data: None,
+                        session_id: None,
                     });
                 }
                 prompt_file_path = Some(prompt_path.clone());
 
-                let escaped_path = prompt_path.to_string_lossy().replace('\'', "''");
-
-                // Build inner command: pipe prompt via stdin to codex
-                let model_arg = self.options.model.as_ref()
-                    .map(|m| format!("-m '{}' ", m))
-                    .unwrap_or_default();
-                let inner_cmd = format!(
-                    "$p | & codex exec --json --sandbox danger-full-access {model_arg}-"
-                );
-                let ps_command = format!(
-                    "$p = [IO.File]::ReadAllText('{}'); {}; exit $LASTEXITCODE",
-                    escaped_path, inner_cmd
+                let ps_command = build_codex_powershell_command(
+                    &prompt_path,
+                    self.options.model.as_deref(),
+                    self.options.resume_session_id.as_deref(),
                 );
 
                 cmd = Command::new("powershell.exe");
@@ -522,6 +569,7 @@ impl CLIAgentRunner {
                     error: Some(format!("Failed to start CLI agent: {e}")),
                     summary: None,
                     changes_data: None,
+                    session_id: None,
                 });
             }
         };
@@ -604,7 +652,13 @@ impl CLIAgentRunner {
                     buf.push_str(&line);
                     buf.push('\n');
                 }
-                parsers::parse_output_line(&agent_type_stdout, &trimmed, &sse_stdout, &task_id_stdout).await;
+                parsers::parse_output_line(
+                    &agent_type_stdout,
+                    &trimmed,
+                    &sse_stdout,
+                    &task_id_stdout,
+                )
+                .await;
             }
         });
 
@@ -622,7 +676,12 @@ impl CLIAgentRunner {
                 let trimmed = line.trim().to_string();
                 if !trimmed.is_empty() {
                     sse_stderr
-                        .emit_log(&task_id_stderr, "warn", &format!("CLI stderr: {trimmed}"), None)
+                        .emit_log(
+                            &task_id_stderr,
+                            "warn",
+                            &format!("CLI stderr: {trimmed}"),
+                            None,
+                        )
                         .await;
                     collected_lines.push(trimmed);
                 }
@@ -637,7 +696,9 @@ impl CLIAgentRunner {
         let task_id_feedback = task_id.clone();
         let stdin_for_feedback = stdin_handle.clone();
         let feedback_handle = tokio::spawn(async move {
-            let Some(ref mut rx) = feedback_rx else { return };
+            let Some(ref mut rx) = feedback_rx else {
+                return;
+            };
             while let Some(msg) = rx.recv().await {
                 if let Some(ref stdin_mtx) = stdin_for_feedback {
                     info!(task_id = %task_id_feedback, "Writing feedback to agent stdin: {msg}");
@@ -673,6 +734,7 @@ impl CLIAgentRunner {
                                 error: Some("Agent was cancelled".to_string()),
                                 summary: None,
                                 changes_data: None,
+                                session_id: self.extract_session_id().await,
                             })
                         } else if code == 0 {
                             let summary = self.extract_summary().await;
@@ -682,6 +744,7 @@ impl CLIAgentRunner {
                                 error: None,
                                 summary: Some(summary),
                                 changes_data: None,
+                                session_id: self.extract_session_id().await,
                             })
                         } else {
                             // Check for auth errors
@@ -693,6 +756,7 @@ impl CLIAgentRunner {
                                     error: Some(auth_msg),
                                     summary: None,
                                     changes_data: None,
+                                    session_id: self.extract_session_id().await,
                                 })
                             } else {
                                 let error_msg = format!("CLI process exited with code {code}");
@@ -702,6 +766,7 @@ impl CLIAgentRunner {
                                     error: Some(error_msg),
                                     summary: None,
                                     changes_data: None,
+                                    session_id: self.extract_session_id().await,
                                 })
                             }
                         }
@@ -714,6 +779,7 @@ impl CLIAgentRunner {
                             error: Some(format!("CLI process error: {e}")),
                             summary: None,
                             changes_data: None,
+                            session_id: self.extract_session_id().await,
                         })
                     }
                 }
@@ -729,6 +795,7 @@ impl CLIAgentRunner {
                     error: Some("Agent was cancelled".to_string()),
                     summary: None,
                     changes_data: None,
+                    session_id: self.extract_session_id().await,
                 })
             }
 
@@ -748,6 +815,7 @@ impl CLIAgentRunner {
                     error: Some("Agent timed out due to silence".to_string()),
                     summary: None,
                     changes_data: None,
+                    session_id: self.extract_session_id().await,
                 })
             }
         };
@@ -787,11 +855,22 @@ impl CLIAgentRunner {
             }
         }
 
+        // For Codex, find the last completed agent message in the NDJSON stream.
+        // This keeps role sub-agent outputs usable for internal orchestration.
+        if self.options.agent_type == AgentType::Codex {
+            for line in output.lines().rev() {
+                let trimmed = line.trim();
+                let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                    continue;
+                };
+                if let Some(text) = extract_codex_agent_message_text(&parsed) {
+                    return text.chars().take(2000).collect();
+                }
+            }
+        }
+
         // Fall back to the last non-empty lines
-        let lines: Vec<&str> = output
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .collect();
+        let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
         let last_lines: String = lines
             .iter()
             .rev()
@@ -808,8 +887,145 @@ impl CLIAgentRunner {
             last_lines[..len].to_string()
         }
     }
+
+    async fn extract_session_id(&self) -> Option<String> {
+        let output = self.output.lock().await;
+
+        for line in output.lines().rev() {
+            let trimmed = line.trim();
+            let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+
+            if self.options.agent_type == AgentType::ClaudeCode {
+                if parsed.get("type").and_then(|t| t.as_str()) == Some("system") {
+                    if let Some(session_id) = parsed.get("session_id").and_then(|id| id.as_str()) {
+                        return Some(session_id.to_string());
+                    }
+                }
+            }
+
+            if self.options.agent_type == AgentType::Codex {
+                if parsed.get("type").and_then(|t| t.as_str()) == Some("thread.started") {
+                    if let Some(thread_id) = parsed.get("thread_id").and_then(|id| id.as_str()) {
+                        return Some(thread_id.to_string());
+                    }
+                }
+            }
+        }
+
+        self.options.resume_session_id.clone()
+    }
+}
+
+fn extract_codex_agent_message_text(value: &serde_json::Value) -> Option<String> {
+    let item = value.get("item")?;
+    let item_type = item.get("type").and_then(|value| value.as_str())?;
+    if !matches!(item_type, "agent_message" | "message") {
+        return None;
+    }
+
+    item.get("text")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .or_else(|| {
+            item.get("content")
+                .and_then(|value| value.as_array())
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter_map(|block| block.get("text").and_then(|value| value.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+        })
+        .filter(|text| !text.trim().is_empty())
 }
 
 // Suppress the unused SILENCE_TIMEOUT warning -- it documents the design intent
 // and will be used when we add the silence-warning feature.
 const _: Duration = SILENCE_TIMEOUT;
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_command_allows_chrome_mcp_when_enabled() {
+        let command = build_cli_command(&AgentType::ClaudeCode, "prompt", None, false, None, true);
+
+        let allowed_tools = command
+            .args
+            .windows(2)
+            .find_map(|pair| {
+                if pair[0] == "--allowedTools" {
+                    Some(pair[1].as_str())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert!(allowed_tools.contains("Read,Edit,Bash,Write"));
+        assert!(allowed_tools.contains("mcp__chrome-devtools__*"));
+    }
+
+    #[test]
+    fn claude_command_does_not_allow_chrome_mcp_by_default() {
+        let command = build_cli_command(&AgentType::ClaudeCode, "prompt", None, false, None, false);
+
+        let allowed_tools = command
+            .args
+            .windows(2)
+            .find_map(|pair| {
+                if pair[0] == "--allowedTools" {
+                    Some(pair[1].as_str())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert_eq!(allowed_tools, "Read,Edit,Bash,Write");
+    }
+
+    #[test]
+    fn codex_powershell_command_uses_cmd_shim() {
+        let command = build_codex_powershell_command(
+            std::path::Path::new(r"C:\Temp\agent-prompt.txt"),
+            Some("gpt-5.5"),
+            None,
+        );
+
+        assert!(command.contains("& codex.cmd exec"));
+        assert!(command.contains("-m 'gpt-5.5'"));
+        assert!(command.contains("if ($null -ne $LASTEXITCODE)"));
+        assert!(!command.contains("& codex exec"));
+    }
+
+    #[test]
+    fn codex_powershell_command_can_resume_thread() {
+        let command = build_codex_powershell_command(
+            std::path::Path::new(r"C:\Temp\agent-prompt.txt"),
+            Some("gpt-5.5"),
+            Some("019e64a4-5e73-71a1-a194-3708d26e8dcf"),
+        );
+
+        assert!(command.contains("& codex.cmd exec resume --json"));
+        assert!(command.contains("'019e64a4-5e73-71a1-a194-3708d26e8dcf' -"));
+        assert!(!command.contains("--sandbox danger-full-access"));
+    }
+
+    #[test]
+    fn codex_agent_message_text_is_extracted_from_ndjson_item() {
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"parsed answer"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_codex_agent_message_text(&value).as_deref(),
+            Some("parsed answer")
+        );
+    }
+}

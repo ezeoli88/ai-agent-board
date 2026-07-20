@@ -1,12 +1,17 @@
 import { createRouter, createRoute, createRootRoute, Outlet, redirect } from '@tanstack/react-router'
 import { Providers } from '@/components/shared/providers'
 import { MainLayout } from '@/components/layout/main-layout'
+import { FEATURE_FLAGS } from '@/config/features'
 import { getAuthToken } from '@/lib/auth'
 
 // Lazy imports for pages to enable code splitting
 import HomePage from '@/app/page'
 import BoardPage from '@/app/board/page'
 import DiffPage from '@/app/diff/[taskId]/page'
+import QAPage from '@/app/qa/page'
+import QARunDetailPage from '@/app/qa/runs/[runId]/page'
+import SpecsPage from '@/app/specs/page'
+import SpecDetailPage from '@/app/specs/[specId]/page'
 import ReposPage from '@/app/repos/page'
 import SettingsPage from '@/app/settings/page'
 import McpSetupPage from '@/app/mcp-setup/page'
@@ -68,6 +73,40 @@ const boardRoute = createRoute({
   component: BoardPage,
 })
 
+const qaRoute = createRoute({
+  getParentRoute: () => mainLayoutRoute,
+  path: '/qa',
+  beforeLoad: () => {
+    if (!FEATURE_FLAGS.qaDashboard) {
+      throw redirect({ to: '/board' })
+    }
+  },
+  component: QAPage,
+})
+
+const qaRunDetailRoute = createRoute({
+  getParentRoute: () => mainLayoutRoute,
+  path: '/qa/runs/$runId',
+  beforeLoad: () => {
+    if (!FEATURE_FLAGS.qaDashboard) {
+      throw redirect({ to: '/board' })
+    }
+  },
+  component: QARunDetailPage,
+})
+
+const specsRoute = createRoute({
+  getParentRoute: () => mainLayoutRoute,
+  path: '/specs',
+  component: SpecsPage,
+})
+
+const specDetailRoute = createRoute({
+  getParentRoute: () => mainLayoutRoute,
+  path: '/specs/$specId',
+  component: SpecDetailPage,
+})
+
 // Diff route
 const diffRoute = createRoute({
   getParentRoute: () => mainLayoutRoute,
@@ -113,6 +152,10 @@ const routeTree = rootRoute.addChildren([
   mcpSetupRoute,
   mainLayoutRoute.addChildren([
     boardRoute,
+    qaRoute,
+    qaRunDetailRoute,
+    specsRoute,
+    specDetailRoute,
     diffRoute,
     settingsRoute,
   ]),

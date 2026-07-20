@@ -1,8 +1,8 @@
 //! Task event persistence service.
 //!
-//! Provides functions to persist and retrieve SSE events from the `task_logs` table.
-//! Events are stored with their full JSON payload in `event_data`, while `level`/`message`
-//! are populated for backward compatibility with the export format.
+//! Provides functions to persist and retrieve SSE events. New events are stored
+//! in `agent_events`, which can be keyed by either a task id or a spec id. Legacy
+//! task events are still read from `task_logs` for backward compatibility.
 
 use rusqlite::Connection;
 use tracing::warn;
@@ -17,11 +17,11 @@ pub struct PersistEvent {
     pub timestamp: String,
 }
 
-/// Batch-inserts events into the `task_logs` table.
+/// Batch-inserts events into the `agent_events` table.
 ///
 /// For `log` events, extracts `level` and `message` from the event data for
-/// backward compatibility. For all other event types, stores `level='info'`
-/// and `message=<event_type>`.
+/// readable exports. For all other event types, stores `level='info'` and
+/// `message=<event_type>`.
 pub fn insert_events(conn: &Connection, events: &[PersistEvent]) -> Result<(), AppError> {
     if events.is_empty() {
         return Ok(());
@@ -29,7 +29,7 @@ pub fn insert_events(conn: &Connection, events: &[PersistEvent]) -> Result<(), A
 
     let mut stmt = conn
         .prepare_cached(
-            "INSERT INTO task_logs (id, task_id, timestamp, level, message, event_type, event_data)
+            "INSERT INTO agent_events (id, run_id, timestamp, level, message, event_type, event_data)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .map_err(AppError::Database)?;
@@ -70,12 +70,39 @@ pub fn insert_events(conn: &Connection, events: &[PersistEvent]) -> Result<(), A
     Ok(())
 }
 
-/// Retrieves all persisted events for a task, ordered by insertion order (ROWID ASC).
+/// Retrieves all persisted events for a run id, ordered by insertion order (ROWID ASC).
 ///
-/// Handles two cases:
-/// - **New rows** (have `event_data`): deserialize from the stored JSON payload.
-/// - **Legacy rows** (no `event_data`): reconstruct a log SSEEvent from `level`/`message`.
+/// `run_id` is historically named `task_id` by callers, but specs use the same
+/// function with their spec id. If no generic events exist, it falls back to
+/// legacy `task_logs` rows.
 pub fn get_events_for_task(conn: &Connection, task_id: &str) -> Result<Vec<SSEEvent>, AppError> {
+    if table_exists(conn, "agent_events")? {
+        let events = get_events_from_agent_events(conn, task_id)?;
+        if !events.is_empty() {
+            return Ok(events);
+        }
+    }
+
+    get_events_from_task_logs(conn, task_id)
+}
+
+fn get_events_from_agent_events(
+    conn: &Connection,
+    run_id: &str,
+) -> Result<Vec<SSEEvent>, AppError> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT level, message, event_type, event_data, timestamp
+             FROM agent_events
+             WHERE run_id = ?1
+             ORDER BY ROWID ASC",
+        )
+        .map_err(AppError::Database)?;
+
+    read_events_from_stmt(&mut stmt, run_id)
+}
+
+fn get_events_from_task_logs(conn: &Connection, task_id: &str) -> Result<Vec<SSEEvent>, AppError> {
     let mut stmt = conn
         .prepare_cached(
             "SELECT level, message, event_type, event_data, timestamp
@@ -85,8 +112,15 @@ pub fn get_events_for_task(conn: &Connection, task_id: &str) -> Result<Vec<SSEEv
         )
         .map_err(AppError::Database)?;
 
+    read_events_from_stmt(&mut stmt, task_id)
+}
+
+fn read_events_from_stmt(
+    stmt: &mut rusqlite::CachedStatement<'_>,
+    id: &str,
+) -> Result<Vec<SSEEvent>, AppError> {
     let rows = stmt
-        .query_map(rusqlite::params![task_id], |row| {
+        .query_map(rusqlite::params![id], |row| {
             let level: String = row.get(0)?;
             let message: String = row.get(1)?;
             let event_type: Option<String> = row.get(2)?;
@@ -115,8 +149,7 @@ pub fn get_events_for_task(conn: &Connection, task_id: &str) -> Result<Vec<SSEEv
             }
         } else {
             // Legacy row: reconstruct a log event from level/message
-            let ts = timestamp
-                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            let ts = timestamp.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
             SSEEvent {
                 event_type: SSEEventType::Log,
                 data: serde_json::json!({
@@ -131,6 +164,17 @@ pub fn get_events_for_task(conn: &Connection, task_id: &str) -> Result<Vec<SSEEv
     }
 
     Ok(events)
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, AppError> {
+    let exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table_name],
+            |row| row.get(0),
+        )
+        .map_err(AppError::Database)?;
+    Ok(exists > 0)
 }
 
 /// Parses an event type string back into an SSEEventType enum.

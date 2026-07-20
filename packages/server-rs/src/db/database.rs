@@ -44,9 +44,9 @@ impl Database {
     {
         let db = Arc::clone(&self.inner);
         tokio::task::spawn_blocking(move || {
-            let conn = db.lock().map_err(|e| {
-                AppError::Internal(anyhow::anyhow!("Database lock poisoned: {e}"))
-            })?;
+            let conn = db
+                .lock()
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Database lock poisoned: {e}")))?;
             f(&conn)
         })
         .await?
@@ -60,9 +60,9 @@ impl Database {
     {
         let db = Arc::clone(&self.inner);
         tokio::task::spawn_blocking(move || {
-            let conn = db.lock().map_err(|e| {
-                AppError::Internal(anyhow::anyhow!("Database lock poisoned: {e}"))
-            })?;
+            let conn = db
+                .lock()
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Database lock poisoned: {e}")))?;
             conn.execute_batch("BEGIN TRANSACTION")
                 .map_err(AppError::Database)?;
             match f(&conn) {

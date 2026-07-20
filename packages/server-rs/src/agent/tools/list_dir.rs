@@ -42,10 +42,7 @@ pub async fn execute(args: Value, cwd: &Path) -> ToolResult {
             }
         })
         .unwrap_or_else(|| cwd.to_path_buf());
-    let max_depth = args
-        .get("max_depth")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1) as usize;
+    let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
 
     let mut results = Vec::new();
     list_recursive(&dir, max_depth, 0, &mut results);

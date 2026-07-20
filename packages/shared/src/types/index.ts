@@ -13,6 +13,14 @@ export {
   getPhaseForStatus,
 } from './task.types.js';
 
+// Spec types
+export {
+  SPEC_STATUS_LABELS,
+  SPEC_STATUS_COLORS,
+  isSpecTerminalStatus,
+  getSpecAvailableActions,
+} from './spec.types.js';
+
 // SSE types
 export type {
   LogLevel,

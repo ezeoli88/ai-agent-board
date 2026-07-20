@@ -16,7 +16,13 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
         Ok(v) => v,
         Err(_) => {
             // Not JSON -- plain text agent message
-            emit_log(emitter, task_id, "info", &format!("Agent: {}", truncate(line, 1000))).await;
+            emit_log(
+                emitter,
+                task_id,
+                "info",
+                &format!("Agent: {}", truncate(line, 1000)),
+            )
+            .await;
             emit_chat_message(emitter, task_id, "assistant", line).await;
             return;
         }
@@ -49,7 +55,8 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
             };
 
             emit_log(emitter, task_id, "info", &info_msg).await;
-            emit_chat_message_with_ts(emitter, task_id, "system", &info_msg, timestamp.as_deref()).await;
+            emit_chat_message_with_ts(emitter, task_id, "system", &info_msg, timestamp.as_deref())
+                .await;
         }
 
         "tool_use" => {
@@ -58,10 +65,7 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
                 .get("tool_name")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            let tool_id = parsed
-                .get("tool_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let tool_id = parsed.get("tool_id").and_then(Value::as_str).unwrap_or("");
             let parameters = parsed.get("parameters");
 
             let summary = extract_tool_summary(parameters);
@@ -71,18 +75,34 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
             } else {
                 format!(": {summary}")
             };
-            emit_log(emitter, task_id, "info", &format!("Tool: {tool_name}{log_detail}")).await;
-            emit_tool_activity_with_ts(emitter, task_id, tool_id, tool_name, &summary, "running", timestamp.as_deref()).await;
+            emit_log(
+                emitter,
+                task_id,
+                "info",
+                &format!("Tool: {tool_name}{log_detail}"),
+            )
+            .await;
+            emit_tool_activity_with_ts(
+                emitter,
+                task_id,
+                tool_id,
+                tool_name,
+                &summary,
+                "running",
+                timestamp.as_deref(),
+            )
+            .await;
         }
 
         "tool_result" => {
             // Tool result -- emit tool activity with completed/error status
-            let tool_id = parsed
-                .get("tool_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let tool_id = parsed.get("tool_id").and_then(Value::as_str).unwrap_or("");
             let status_str = parsed.get("status").and_then(Value::as_str).unwrap_or("");
-            let status = if status_str == "success" { "completed" } else { "error" };
+            let status = if status_str == "success" {
+                "completed"
+            } else {
+                "error"
+            };
             let output = parsed.get("output").and_then(Value::as_str);
 
             let summary_text = if status == "error" {
@@ -95,13 +115,32 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
 
             if status == "error" {
                 if let Some(out) = output {
-                    emit_log(emitter, task_id, "warn", &format!("Tool error: {}", truncate(out, 500))).await;
+                    emit_log(
+                        emitter,
+                        task_id,
+                        "warn",
+                        &format!("Tool error: {}", truncate(out, 500)),
+                    )
+                    .await;
                 }
             } else {
-                debug!(task_id, "Tool result ({} chars)", output.map(|o| o.len()).unwrap_or(0));
+                debug!(
+                    task_id,
+                    "Tool result ({} chars)",
+                    output.map(|o| o.len()).unwrap_or(0)
+                );
             }
 
-            emit_tool_activity_with_ts(emitter, task_id, tool_id, "", &summary_text, status, timestamp.as_deref()).await;
+            emit_tool_activity_with_ts(
+                emitter,
+                task_id,
+                tool_id,
+                "",
+                &summary_text,
+                status,
+                timestamp.as_deref(),
+            )
+            .await;
         }
 
         "result" => {
@@ -154,8 +193,15 @@ pub async fn parse(line: &str, emitter: &SSEEmitter, task_id: &str) {
                 .and_then(Value::as_str);
 
             if let Some(msg) = message_text {
-                emit_log(emitter, task_id, "info", &format!("Agent: {}", truncate(msg, 1000))).await;
-                emit_chat_message_with_ts(emitter, task_id, "assistant", msg, timestamp.as_deref()).await;
+                emit_log(
+                    emitter,
+                    task_id,
+                    "info",
+                    &format!("Agent: {}", truncate(msg, 1000)),
+                )
+                .await;
+                emit_chat_message_with_ts(emitter, task_id, "assistant", msg, timestamp.as_deref())
+                    .await;
             } else {
                 debug!(
                     task_id,
@@ -173,7 +219,15 @@ fn extract_tool_summary(parameters: Option<&Value>) -> String {
         return String::new();
     };
 
-    for key in &["command", "file_path", "path", "pattern", "query", "file", "url"] {
+    for key in &[
+        "command",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "file",
+        "url",
+    ] {
         if let Some(val) = params.get(key).and_then(Value::as_str) {
             return truncate(val, 200).to_string();
         }

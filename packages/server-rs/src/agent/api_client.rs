@@ -198,7 +198,12 @@ impl MiniMaxClient {
 
         if chunk_count == 0 && content.is_empty() && tool_calls_map.is_empty() {
             sse_emitter
-                .emit_log(task_id, "warn", "No response received from API (0 chunks)", None)
+                .emit_log(
+                    task_id,
+                    "warn",
+                    "No response received from API (0 chunks)",
+                    None,
+                )
                 .await;
         }
 
@@ -464,5 +469,8 @@ pub async fn validate_minimax_key(api_key: &str) -> Result<bool> {
         }
     }
 
-    Err(anyhow!("Unexpected response from MiniMax API: HTTP {}", status))
+    Err(anyhow!(
+        "Unexpected response from MiniMax API: HTTP {}",
+        status
+    ))
 }

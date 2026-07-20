@@ -7,6 +7,9 @@ use tracing::info;
 
 use crate::error::AppError;
 
+const CHROME_MCP_ENABLED_KEY: &str = "qa.chrome_mcp.enabled";
+const CHROME_MCP_URL_KEY: &str = "qa.chrome_mcp.url";
+
 /// Gets a setting value by key.
 /// Returns `None` if the setting does not exist.
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, AppError> {
@@ -66,9 +69,7 @@ pub fn get_all_settings(conn: &Connection) -> Result<Vec<(String, String)>, AppE
 
 /// Gets the default agent configuration.
 /// Returns `(agent_type, agent_model)` where either value may be `None` if not configured.
-pub fn get_default_agent(
-    conn: &Connection,
-) -> Result<(Option<String>, Option<String>), AppError> {
+pub fn get_default_agent(conn: &Connection) -> Result<(Option<String>, Option<String>), AppError> {
     let agent_type = get_setting(conn, "default_agent_type")?;
     let agent_model = get_setting(conn, "default_agent_model")?;
     Ok((agent_type, agent_model))
@@ -85,6 +86,35 @@ pub fn set_default_agent(
     if !agent_model.is_empty() {
         set_setting(conn, "default_agent_model", agent_model)?;
     }
+    Ok(())
+}
+
+/// Gets the Chrome MCP configuration used by QA runs.
+pub fn get_chrome_mcp_config(conn: &Connection) -> Result<(bool, Option<String>), AppError> {
+    let enabled = get_setting(conn, CHROME_MCP_ENABLED_KEY)?
+        .map(|value| value == "true")
+        .unwrap_or(false);
+    let url = get_setting(conn, CHROME_MCP_URL_KEY)?;
+    Ok((enabled, url))
+}
+
+/// Sets the Chrome MCP configuration used by QA runs.
+pub fn set_chrome_mcp_config(
+    conn: &Connection,
+    enabled: bool,
+    url: Option<&str>,
+) -> Result<(), AppError> {
+    set_setting(
+        conn,
+        CHROME_MCP_ENABLED_KEY,
+        if enabled { "true" } else { "false" },
+    )?;
+
+    match url {
+        Some(value) if !value.is_empty() => set_setting(conn, CHROME_MCP_URL_KEY, value)?,
+        _ => delete_setting(conn, CHROME_MCP_URL_KEY)?,
+    }
+
     Ok(())
 }
 
@@ -174,5 +204,29 @@ mod tests {
         let (at, am) = get_default_agent(&conn).unwrap();
         assert_eq!(at, Some("claude-code".to_string()));
         assert_eq!(am, Some("opus".to_string()));
+    }
+
+    #[test]
+    fn test_chrome_mcp_config_defaults_to_disabled() {
+        let conn = setup_db();
+        let (enabled, url) = get_chrome_mcp_config(&conn).unwrap();
+
+        assert!(!enabled);
+        assert_eq!(url, None);
+    }
+
+    #[test]
+    fn test_chrome_mcp_config_can_be_updated() {
+        let conn = setup_db();
+        set_chrome_mcp_config(&conn, true, Some("http://localhost:9222/mcp")).unwrap();
+
+        let (enabled, url) = get_chrome_mcp_config(&conn).unwrap();
+        assert!(enabled);
+        assert_eq!(url, Some("http://localhost:9222/mcp".to_string()));
+
+        set_chrome_mcp_config(&conn, false, None).unwrap();
+        let (enabled, url) = get_chrome_mcp_config(&conn).unwrap();
+        assert!(!enabled);
+        assert_eq!(url, None);
     }
 }

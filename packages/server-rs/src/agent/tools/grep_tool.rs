@@ -41,10 +41,7 @@ pub fn definition() -> Value {
 }
 
 pub async fn execute(args: Value, cwd: &Path) -> ToolResult {
-    let pattern = args
-        .get("pattern")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
     let search_path = args
         .get("path")
         .and_then(|v| v.as_str())

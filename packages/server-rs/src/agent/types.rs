@@ -17,6 +17,8 @@ pub struct AgentRunResult {
     pub summary: Option<String>,
     /// Serialized changes/diff data.
     pub changes_data: Option<String>,
+    /// Provider-specific conversation/session id, when the runner exposes one.
+    pub session_id: Option<String>,
 }
 
 /// Supported agent types (CLI and API-based).
@@ -95,7 +97,7 @@ pub struct CLIRunnerOptions {
     pub agent_type: AgentType,
     /// The prompt text to send to the agent.
     pub prompt: String,
-    /// Optional model override (e.g., "claude-opus-4-6").
+    /// Optional model override (e.g., "claude-opus-4-7").
     pub model: Option<String>,
     /// Working directory for the spawned process.
     pub cwd: PathBuf,
@@ -103,6 +105,10 @@ pub struct CLIRunnerOptions {
     pub env: HashMap<String, String>,
     /// Whether this is a plan-only run (read-only tools).
     pub plan_only: bool,
+    /// Provider-specific conversation/session id to resume, when supported.
+    pub resume_session_id: Option<String>,
+    /// Whether Claude Code should be allowed to call the configured Chrome MCP tools.
+    pub chrome_mcp_enabled: bool,
 }
 
 /// Options for constructing and running an API-based agent (e.g., MiniMax).

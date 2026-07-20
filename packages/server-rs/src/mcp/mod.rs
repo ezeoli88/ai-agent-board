@@ -17,11 +17,16 @@ pub mod resources;
 pub mod server;
 pub mod tools;
 
-use axum::{extract::State, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use tracing::debug;
 
 use crate::AppState;
-use jsonrpc::{JsonRpcRequest, JsonRpcResponse};
+use jsonrpc::JsonRpcRequest;
 use server::McpServer;
 
 /// Axum handler for `POST /api/mcp`.
@@ -31,8 +36,15 @@ use server::McpServer;
 pub async fn mcp_handler(
     State(state): State<AppState>,
     Json(req): Json<JsonRpcRequest>,
-) -> Json<JsonRpcResponse> {
+) -> Response {
     debug!(method = %req.method, "MCP request received");
+    let is_notification = req.id.is_none();
     let server = McpServer::new(&state);
-    Json(server.dispatch(req).await)
+    let response = server.dispatch(req).await;
+
+    if is_notification {
+        StatusCode::ACCEPTED.into_response()
+    } else {
+        Json(response).into_response()
+    }
 }

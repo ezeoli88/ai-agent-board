@@ -82,7 +82,11 @@ pub fn save_secret(
         .map_err(AppError::Database)?;
     }
 
-    info!(key_type = key_type, provider = provider, "Secret saved successfully");
+    info!(
+        key_type = key_type,
+        provider = provider,
+        "Secret saved successfully"
+    );
     Ok(())
 }
 
@@ -158,11 +162,8 @@ pub fn delete_secret(
         )
         .map_err(AppError::Database)?;
     } else {
-        conn.execute(
-            "DELETE FROM user_secrets WHERE key_type = ?1",
-            [key_type],
-        )
-        .map_err(AppError::Database)?;
+        conn.execute("DELETE FROM user_secrets WHERE key_type = ?1", [key_type])
+            .map_err(AppError::Database)?;
     }
 
     info!(key_type = key_type, provider = provider, "Secret deleted");
@@ -427,7 +428,14 @@ mod tests {
 
         // Save credentials with metadata
         let meta = r#"{"model":"opus-4"}"#;
-        save_secret(&conn, "ai_api_key", Some("claude"), "sk-ant-123", Some(meta)).unwrap();
+        save_secret(
+            &conn,
+            "ai_api_key",
+            Some("claude"),
+            "sk-ant-123",
+            Some(meta),
+        )
+        .unwrap();
 
         let creds = get_ai_credentials(&conn).unwrap();
         assert!(creds.is_some());

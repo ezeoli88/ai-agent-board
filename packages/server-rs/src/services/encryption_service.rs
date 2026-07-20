@@ -12,11 +12,11 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::generic_array::typenum::{U12, U16};
+use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::Aead;
-use aes_gcm::{Aes256Gcm, AesGcm, KeyInit};
 use aes_gcm::aes::Aes256;
+use aes_gcm::{Aes256Gcm, AesGcm, KeyInit};
 use rand::RngCore;
 use tracing::{info, warn};
 
@@ -206,8 +206,8 @@ pub fn decrypt(encrypted: &str) -> Result<String, AppError> {
         ));
     }
 
-    let nonce_bytes = hex::decode(iv_hex)
-        .map_err(|e| AppError::Validation(format!("Invalid IV hex: {e}")))?;
+    let nonce_bytes =
+        hex::decode(iv_hex).map_err(|e| AppError::Validation(format!("Invalid IV hex: {e}")))?;
     let auth_tag = hex::decode(auth_tag_hex)
         .map_err(|e| AppError::Validation(format!("Invalid auth tag hex: {e}")))?;
     let ciphertext = hex::decode(ciphertext_hex)
@@ -236,12 +236,11 @@ pub fn decrypt(encrypted: &str) -> Result<String, AppError> {
         }
         16 => {
             // TypeScript server uses 16-byte IVs with Node.js crypto GCM
-            let cipher_16: AesGcm<Aes256, U16> =
-                AesGcm::new(GenericArray::from_slice(key));
+            let cipher_16: AesGcm<Aes256, U16> = AesGcm::new(GenericArray::from_slice(key));
             let nonce = GenericArray::<u8, U16>::from_slice(&nonce_bytes);
-            cipher_16
-                .decrypt(nonce, payload.as_ref())
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Decryption failed (16-byte nonce): {e}")))?
+            cipher_16.decrypt(nonce, payload.as_ref()).map_err(|e| {
+                AppError::Internal(anyhow::anyhow!("Decryption failed (16-byte nonce): {e}"))
+            })?
         }
         other => {
             return Err(AppError::Validation(format!(

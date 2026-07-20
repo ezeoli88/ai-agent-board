@@ -280,8 +280,7 @@ impl PRCommentsService {
         pr_url: Option<&str>,
         new_status: &str,
     ) {
-        let should_track =
-            PR_ACTIVE_STATUSES.contains(&new_status) && pr_url.is_some();
+        let should_track = PR_ACTIVE_STATUSES.contains(&new_status) && pr_url.is_some();
         let is_tracking = {
             let prs = self.tracked_prs.read().await;
             prs.contains_key(task_id)
@@ -355,14 +354,10 @@ async fn poll_single_pr(
 ) -> Result<(), AppError> {
     let (repo_url, pr_number, since) = {
         let prs = tracked_prs.read().await;
-        let pr = prs.get(task_id).ok_or_else(|| {
-            AppError::NotFound(format!("Task {task_id} is not tracked"))
-        })?;
-        (
-            pr.repo_url.clone(),
-            pr.pr_number,
-            pr.last_poll_time.clone(),
-        )
+        let pr = prs
+            .get(task_id)
+            .ok_or_else(|| AppError::NotFound(format!("Task {task_id} is not tracked")))?;
+        (pr.repo_url.clone(), pr.pr_number, pr.last_poll_time.clone())
     };
 
     let is_gitlab = gitlab_service::is_gitlab_url(&repo_url);
@@ -370,9 +365,8 @@ async fn poll_single_pr(
     let new_comment_ids: Vec<i64>;
 
     if is_gitlab {
-        let token = gitlab_token.ok_or_else(|| {
-            AppError::Unauthorized("GitLab token not configured".into())
-        })?;
+        let token = gitlab_token
+            .ok_or_else(|| AppError::Unauthorized("GitLab token not configured".into()))?;
 
         let notes =
             gitlab_service::get_merge_request_notes(token, &repo_url, pr_number, Some(&since))
@@ -390,15 +384,14 @@ async fn poll_single_pr(
             return Ok(());
         }
     } else {
-        let token = github_token.ok_or_else(|| {
-            AppError::Unauthorized("GitHub token not configured".into())
-        })?;
+        let token = github_token
+            .ok_or_else(|| AppError::Unauthorized("GitHub token not configured".into()))?;
 
         // Parse owner/repo from URL
         let re = regex_lite::Regex::new(r"github\.com[/:]([^/]+)/([^/\s.]+)").unwrap();
-        let caps = re.captures(&repo_url).ok_or_else(|| {
-            AppError::Validation(format!("Cannot parse GitHub URL: {repo_url}"))
-        })?;
+        let caps = re
+            .captures(&repo_url)
+            .ok_or_else(|| AppError::Validation(format!("Cannot parse GitHub URL: {repo_url}")))?;
         let owner = caps.get(1).unwrap().as_str();
         let repo = caps.get(2).unwrap().as_str().trim_end_matches(".git");
 

@@ -3,18 +3,21 @@
 import { Link, useLocation } from '@tanstack/react-router'
 import {
   ClipboardList,
-  LayoutDashboard,
+  FileText,
   Settings,
   Plus,
+  TestTube2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { FEATURE_FLAGS } from '@/config/features'
 import { useLayoutStore } from '@/stores/layout-store'
 import { useTaskUIStore } from '@/features/tasks/stores/task-ui-store'
 
@@ -26,14 +29,23 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   {
-    title: 'Dashboard',
-    href: '/board',
-    icon: LayoutDashboard,
-  },
-  {
-    title: 'All Tasks',
+    title: 'Tasks',
     href: '/board',
     icon: ClipboardList,
+  },
+  ...(FEATURE_FLAGS.qaDashboard
+    ? [
+        {
+          title: 'QA',
+          href: '/qa',
+          icon: TestTube2,
+        },
+      ]
+    : []),
+  {
+    title: 'Specs',
+    href: '/specs',
+    icon: FileText,
   },
 ]
 
@@ -68,6 +80,9 @@ export function MobileNav() {
       >
         <SheetHeader className="border-b border-border px-4 py-4">
           <SheetTitle className="text-left">Navigation</SheetTitle>
+          <SheetDescription className="sr-only">
+            Main navigation for tasks, specs, and settings.
+          </SheetDescription>
         </SheetHeader>
 
         <div className="flex h-[calc(100vh-5rem)] flex-col">

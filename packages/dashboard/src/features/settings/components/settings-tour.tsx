@@ -15,7 +15,7 @@ const TOUR_STEPS = [
   {
     targetId: 'settings-preferences',
     title: 'Preferencias',
-    description: 'Personaliza el tema (claro/oscuro) y el idioma de las especificaciones generadas.',
+    description: 'Personaliza el rol activo, el tema (claro/oscuro) y el idioma de las especificaciones generadas.',
   },
 ]
 

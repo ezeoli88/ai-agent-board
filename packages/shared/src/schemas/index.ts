@@ -1,8 +1,13 @@
 // Task schemas and types
 export {
   TASK_STATUSES,
+  QA_RUN_STATUSES,
   TaskStatusSchema,
+  QaRunStatusSchema,
+  QaRunSchema,
+  CreateQaRunSchema,
   TaskSchema,
+  QaBoardItemSchema,
   CreateTaskSchema,
   UpdateTaskSchema,
   // New two-agent workflow schemas
@@ -12,7 +17,11 @@ export {
   ApproveSpecRequestSchema,
   ApproveSpecResponseSchema,
   type TaskStatus,
+  type QaRunStatus,
+  type QaRun,
+  type CreateQaRunInput,
   type Task,
+  type QaBoardItem,
   type CreateTaskInput,
   type UpdateTaskInput,
   // New two-agent workflow types
@@ -22,6 +31,25 @@ export {
   type ApproveSpecRequest,
   type ApproveSpecResponse,
 } from './task.schema.js';
+
+// Spec schemas and types
+export {
+  SPEC_STATUSES,
+  SpecStatusSchema,
+  SpecSchema,
+  CreateSpecSchema,
+  UpdateSpecSchema,
+  ApproveSpecStepSchema,
+  AnswerClarificationsSchema,
+  CreateTasksFromSpecResponseSchema,
+  type SpecStatus,
+  type Spec,
+  type CreateSpecInput,
+  type UpdateSpecInput,
+  type ApproveSpecStepInput,
+  type AnswerClarificationsInput,
+  type CreateTasksFromSpecResponse,
+} from './spec.schema.js';
 
 // Feedback schemas and types
 export {
@@ -73,6 +101,9 @@ export {
   GitHubCallbackResponseSchema,
   SetupStatusSchema,
   DisconnectResponseSchema,
+  ChromeMcpConfigSchema,
+  UpdateChromeMcpConfigSchema,
+  UpdateChromeMcpConfigResponseSchema,
   SetupConfigSchema,
   DEFAULT_SETUP_CONFIG,
   // OpenRouter schemas
@@ -88,6 +119,9 @@ export {
   type GitHubCallbackResponse,
   type SetupStatus,
   type DisconnectResponse,
+  type ChromeMcpConfig,
+  type UpdateChromeMcpConfigInput,
+  type UpdateChromeMcpConfigResponse,
   type SetupConfig,
   // OpenRouter types
   type OpenRouterPricing,

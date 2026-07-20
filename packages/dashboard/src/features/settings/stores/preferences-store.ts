@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { DEFAULT_USER_ROLE, type UserRole } from "../types";
 
 /**
  * Theme options
@@ -13,6 +14,7 @@ export type Theme = "light" | "dark" | "system";
  */
 export interface UserPreferences {
   theme: Theme;
+  role: UserRole;
 }
 
 /**
@@ -20,6 +22,7 @@ export interface UserPreferences {
  */
 const DEFAULT_PREFERENCES: UserPreferences = {
   theme: "system",
+  role: DEFAULT_USER_ROLE,
 };
 
 /**
@@ -31,6 +34,7 @@ interface PreferencesState {
 
   // Actions
   setTheme: (theme: Theme) => void;
+  setRole: (role: UserRole) => void;
 
   // Reset
   resetPreferences: () => void;
@@ -50,6 +54,13 @@ export const usePreferencesStore = create<PreferencesState>()(
             theme,
           },
         })),
+      setRole: (role) =>
+        set((state) => ({
+          preferences: {
+            ...state.preferences,
+            role,
+          },
+        })),
 
       // Reset
       resetPreferences: () =>
@@ -59,6 +70,17 @@ export const usePreferencesStore = create<PreferencesState>()(
     }),
     {
       name: "dash-agent-preferences",
+      merge: (persisted, current) => {
+        const persistedState = persisted as Partial<PreferencesState> | undefined;
+        return {
+          ...current,
+          ...persistedState,
+          preferences: {
+            ...current.preferences,
+            ...(persistedState?.preferences ?? {}),
+          },
+        };
+      },
     },
   ),
 );

@@ -153,8 +153,13 @@ impl APIAgentRunner {
             "content": self.options.prompt,
         }));
 
-        sse.emit_log(task_id, "info", &format!("Starting API agent (model: {model})"), None)
-            .await;
+        sse.emit_log(
+            task_id,
+            "info",
+            &format!("Starting API agent (model: {model})"),
+            None,
+        )
+        .await;
 
         let tool_defs = tools::get_tool_definitions(!self.is_sub_agent);
         let tool_defs_json: Vec<Value> = tool_defs;
@@ -183,6 +188,7 @@ impl APIAgentRunner {
                     error: Some("Cancelled by user".into()),
                     summary: None,
                     changes_data: None,
+                    session_id: None,
                 });
             }
 
@@ -234,6 +240,7 @@ impl APIAgentRunner {
                         error: Some(err_msg),
                         summary: None,
                         changes_data: None,
+                        session_id: None,
                     });
                 }
             };
@@ -246,7 +253,8 @@ impl APIAgentRunner {
 
             // Emit raw content as chat message (includes <think> blocks, markdown, etc.)
             if !result.content.is_empty() {
-                sse.emit_chat_message(task_id, "assistant", &result.content).await;
+                sse.emit_chat_message(task_id, "assistant", &result.content)
+                    .await;
             }
 
             // Add assistant message to history
@@ -255,21 +263,24 @@ impl APIAgentRunner {
                 "content": result.content,
             });
             if !result.reasoning_details.is_empty() {
-                assistant_msg["reasoning_details"] = serde_json::json!(
-                    result.reasoning_details.iter().map(|r| serde_json::json!({"text": r})).collect::<Vec<_>>()
-                );
+                assistant_msg["reasoning_details"] = serde_json::json!(result
+                    .reasoning_details
+                    .iter()
+                    .map(|r| serde_json::json!({"text": r}))
+                    .collect::<Vec<_>>());
             }
             if !tool_calls.is_empty() {
-                assistant_msg["tool_calls"] = serde_json::json!(
-                    tool_calls.iter().map(|tc| serde_json::json!({
+                assistant_msg["tool_calls"] = serde_json::json!(tool_calls
+                    .iter()
+                    .map(|tc| serde_json::json!({
                         "id": tc.id,
                         "type": tc.call_type,
                         "function": {
                             "name": tc.function.name,
                             "arguments": tc.function.arguments,
                         }
-                    })).collect::<Vec<_>>()
-                );
+                    }))
+                    .collect::<Vec<_>>());
             }
             self.history.push(assistant_msg);
 
@@ -295,8 +306,8 @@ impl APIAgentRunner {
                 let tool_id = &tc.id;
 
                 // Parse arguments
-                let args: Value = serde_json::from_str(&tc.function.arguments)
-                    .unwrap_or(serde_json::json!({}));
+                let args: Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::json!({}));
 
                 // Handle sub_agent specially
                 if tool_name == "sub_agent" {
@@ -358,6 +369,7 @@ impl APIAgentRunner {
             error: None,
             summary,
             changes_data: None,
+            session_id: None,
         })
     }
 
@@ -425,8 +437,7 @@ impl APIAgentRunner {
                             call_type: "function".to_string(),
                             function: crate::agent::api_client::ToolCallFunction {
                                 name: tc.name.clone(),
-                                arguments: serde_json::to_string(&args_json)
-                                    .unwrap_or_default(),
+                                arguments: serde_json::to_string(&args_json).unwrap_or_default(),
                             },
                         }
                     })
@@ -463,7 +474,10 @@ impl APIAgentRunner {
         sse.emit_log(
             task_id,
             "info",
-            &format!("Spawning sub-agent (max_turns: {max_turns}): {}", &task[..task.len().min(100)]),
+            &format!(
+                "Spawning sub-agent (max_turns: {max_turns}): {}",
+                &task[..task.len().min(100)]
+            ),
             None,
         )
         .await;
@@ -479,8 +493,11 @@ impl APIAgentRunner {
 
         match Box::pin(sub_runner.run(sse)).await {
             Ok(result) => {
-                let content = result.summary.unwrap_or_else(|| "Sub-agent completed without output.".to_string());
-                sse.emit_log(task_id, "info", "Sub-agent completed", None).await;
+                let content = result
+                    .summary
+                    .unwrap_or_else(|| "Sub-agent completed without output.".to_string());
+                sse.emit_log(task_id, "info", "Sub-agent completed", None)
+                    .await;
                 content
             }
             Err(e) => {
@@ -582,10 +599,8 @@ impl APIAgentRunner {
                                 .nth(200)
                                 .map(|(idx, _)| idx)
                                 .unwrap_or(200);
-                            msg["content"] = serde_json::json!(format!(
-                                "{}...[compressed]",
-                                &content[..end]
-                            ));
+                            msg["content"] =
+                                serde_json::json!(format!("{}...[compressed]", &content[..end]));
                         }
                     }
                 }
@@ -625,7 +640,10 @@ impl APIAgentRunner {
 fn format_tool_summary(name: &str, args: &Value) -> String {
     match name {
         "bash" => {
-            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("...");
+            let cmd = args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("...");
             let cmd_short = if cmd.len() > 60 {
                 format!("{}...", &cmd[..60])
             } else {
@@ -638,11 +656,17 @@ fn format_tool_summary(name: &str, args: &Value) -> String {
             format!("{name}: {path}")
         }
         "glob" => {
-            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("...");
+            let pattern = args
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("...");
             format!("glob: {pattern}")
         }
         "grep" => {
-            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("...");
+            let pattern = args
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("...");
             format!("grep: {pattern}")
         }
         "list_directory" => {

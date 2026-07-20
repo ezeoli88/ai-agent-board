@@ -50,9 +50,8 @@ fn get_default_data_root() -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn dirs_fallback_windows() -> PathBuf {
-    let home = env::var("USERPROFILE").unwrap_or_else(|_| {
-        env::var("HOME").unwrap_or_else(|_| "C:\\Users\\Default".into())
-    });
+    let home = env::var("USERPROFILE")
+        .unwrap_or_else(|_| env::var("HOME").unwrap_or_else(|_| "C:\\Users\\Default".into()));
     PathBuf::from(home)
         .join("AppData")
         .join("Local")
@@ -153,10 +152,14 @@ impl Config {
             )
         };
 
-        let repos_base_dir =
-            PathBuf::from(env_or("REPOS_BASE_DIR", default_repos.to_str().unwrap_or("")));
-        let worktrees_dir =
-            PathBuf::from(env_or("WORKTREES_DIR", default_worktrees.to_str().unwrap_or("")));
+        let repos_base_dir = PathBuf::from(env_or(
+            "REPOS_BASE_DIR",
+            default_repos.to_str().unwrap_or(""),
+        ));
+        let worktrees_dir = PathBuf::from(env_or(
+            "WORKTREES_DIR",
+            default_worktrees.to_str().unwrap_or(""),
+        ));
         let database_path = if let Some(override_path) = database_path_override {
             PathBuf::from(override_path)
         } else {

@@ -5,6 +5,9 @@ export type {
   ValidateAIKeyResponse,
   SetupStatus,
   DisconnectResponse,
+  ChromeMcpConfig,
+  UpdateChromeMcpConfigInput,
+  UpdateChromeMcpConfigResponse,
   SetupConfig,
   // OpenRouter types
   OpenRouterModel,

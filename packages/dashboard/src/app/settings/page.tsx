@@ -2,8 +2,9 @@
 
 import { HelpCircle, Plug } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
-import { ConnectionsSection, PreferencesSection, SettingsTour } from '@/features/settings'
+import { ChromeMcpSection, ConnectionsSection, PreferencesSection, SettingsTour } from '@/features/settings'
 import { Button } from '@/components/ui/button'
+import { FEATURE_FLAGS } from '@/config/features'
 
 export default function SettingsPage() {
   const handleLaunchTour = () => {
@@ -51,6 +52,9 @@ export default function SettingsPage() {
         </div>
 
         <ConnectionsSection id="settings-connections" />
+        {FEATURE_FLAGS.qaDashboard && (
+          <ChromeMcpSection id="settings-chrome-mcp" />
+        )}
         <PreferencesSection id="settings-preferences" />
       </div>
 

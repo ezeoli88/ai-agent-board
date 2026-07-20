@@ -441,7 +441,6 @@ fn tool_app_error(context: &str, err: AppError) -> Value {
     tool_error(&format!("{context}: {err}"))
 }
 
-
 // ============================================================================
 // Repository tools
 // ============================================================================
@@ -595,13 +594,11 @@ async fn handle_create_task(state: &AppState, args: Value) -> Value {
         description: args["description"].as_str().map(String::from),
         repo_url: None, // Will be resolved from repository_id if needed
         target_branch: args["target_branch"].as_str().map(String::from),
-        context_files: args["context_files"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            }),
+        context_files: args["context_files"].as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        }),
         build_command: args["build_command"].as_str().map(String::from),
         agent_type: args["agent_type"].as_str().map(String::from),
         agent_model: args["agent_model"].as_str().map(String::from),
@@ -620,9 +617,7 @@ async fn handle_create_task(state: &AppState, args: Value) -> Value {
     match result {
         Ok(data) => {
             if let Some(id) = data["id"].as_str() {
-                state
-                    .data_emitter
-                    .emit_change("task", "created", Some(id));
+                state.data_emitter.emit_change("task", "created", Some(id));
             }
             tool_result(&data)
         }
@@ -633,19 +628,16 @@ async fn handle_create_task(state: &AppState, args: Value) -> Value {
 /// `list_tasks` - List tasks with optional filters.
 async fn handle_list_tasks(state: &AppState, args: Value) -> Value {
     let repository_id = args["repository_id"].as_str().map(String::from);
-    let status_filter: Option<Vec<String>> = args["status"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        });
+    let status_filter: Option<Vec<String>> = args["status"].as_array().map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
 
     let result = state
         .db
         .call(move |conn| {
-            let tasks =
-                task_service::get_all_tasks(conn, None, repository_id.as_deref())?;
+            let tasks = task_service::get_all_tasks(conn, None, repository_id.as_deref())?;
 
             // Apply status filter if provided
             let filtered = if let Some(ref statuses) = status_filter {
@@ -764,7 +756,11 @@ async fn handle_start_task(state: &AppState, args: Value) -> Value {
 
     // Load task
     let tid = task_id.clone();
-    let task = match state.db.call(move |conn| task_service::get_task_by_id(conn, &tid)).await {
+    let task = match state
+        .db
+        .call(move |conn| task_service::get_task_by_id(conn, &tid))
+        .await
+    {
         Ok(t) => t,
         Err(e) => return tool_app_error("start_task", e),
     };
@@ -778,7 +774,9 @@ async fn handle_start_task(state: &AppState, args: Value) -> Value {
     }
 
     // Generate branch name
-    let title_slug: String = task.title.to_lowercase()
+    let title_slug: String = task
+        .title
+        .to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>()
@@ -795,14 +793,22 @@ async fn handle_start_task(state: &AppState, args: Value) -> Value {
     // Update task
     let tid = task_id.clone();
     let branch_clone = branch_name.clone();
-    if let Err(e) = state.db.call(move |conn| {
-        task_service::update_task(conn, &tid, &crate::models::task::UpdateTaskInput {
-            branch_name: Some(Some(branch_clone)),
-            status: Some(TaskStatus::Planning),
-            error: if is_retry { Some(None) } else { None },
-            ..Default::default()
+    if let Err(e) = state
+        .db
+        .call(move |conn| {
+            task_service::update_task(
+                conn,
+                &tid,
+                &crate::models::task::UpdateTaskInput {
+                    branch_name: Some(Some(branch_clone)),
+                    status: Some(TaskStatus::Planning),
+                    error: if is_retry { Some(None) } else { None },
+                    ..Default::default()
+                },
+            )
         })
-    }).await {
+        .await
+    {
         return tool_app_error("start_task", e);
     }
 
@@ -813,23 +819,40 @@ async fn handle_start_task(state: &AppState, args: Value) -> Value {
     let id_clone = task_id.clone();
     let task_clone = task.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::routes::tasks::start_agent_for_task(&state_clone, &id_clone, &task_clone).await {
+        if let Err(e) =
+            crate::routes::tasks::start_agent_for_task(&state_clone, &id_clone, &task_clone).await
+        {
             warn!(task_id = %id_clone, error = %e, "Failed to start agent (MCP)");
             let tid = id_clone.clone();
             let err_msg = e.to_string();
-            let _ = state_clone.db.call(move |conn| {
-                task_service::update_task(conn, &tid, &crate::models::task::UpdateTaskInput {
-                    status: Some(TaskStatus::Failed),
-                    error: Some(Some(err_msg)),
-                    ..Default::default()
+            let _ = state_clone
+                .db
+                .call(move |conn| {
+                    task_service::update_task(
+                        conn,
+                        &tid,
+                        &crate::models::task::UpdateTaskInput {
+                            status: Some(TaskStatus::Failed),
+                            error: Some(Some(err_msg)),
+                            ..Default::default()
+                        },
+                    )
                 })
-            }).await;
-            state_clone.sse_emitter.emit_status(&id_clone, "failed").await;
-            state_clone.sse_emitter.emit_error(&id_clone, &e.to_string()).await;
+                .await;
+            state_clone
+                .sse_emitter
+                .emit_status(&id_clone, "failed")
+                .await;
+            state_clone
+                .sse_emitter
+                .emit_error(&id_clone, &e.to_string())
+                .await;
         }
     });
 
-    state.data_emitter.emit_change("task", "updated", Some(&task_id));
+    state
+        .data_emitter
+        .emit_change("task", "updated", Some(&task_id));
     info!(id = %task_id, "start_task (MCP)");
     tool_result(&json!({ "status": "started", "message": "Agent started" }))
 }
@@ -957,11 +980,7 @@ async fn handle_approve_spec(state: &AppState, args: Value) -> Value {
     let result = state
         .db
         .call(move |conn| {
-            let task = task_service::approve_spec(
-                conn,
-                &task_id,
-                final_spec.as_deref(),
-            )?;
+            let task = task_service::approve_spec(conn, &task_id, final_spec.as_deref())?;
             let task_json = serde_json::to_value(&task)
                 .map_err(|e| AppError::Internal(anyhow::anyhow!("JSON error: {e}")))?;
             Ok(task_json)
@@ -971,9 +990,7 @@ async fn handle_approve_spec(state: &AppState, args: Value) -> Value {
     match result {
         Ok(data) => {
             if let Some(id) = data["id"].as_str() {
-                state
-                    .data_emitter
-                    .emit_change("task", "updated", Some(id));
+                state.data_emitter.emit_change("task", "updated", Some(id));
             }
             tool_result(&data)
         }
@@ -1059,10 +1076,7 @@ async fn handle_send_feedback(state: &AppState, args: Value) -> Value {
         {
             return tool_app_error("send_feedback (plan_approve)", e);
         }
-        state
-            .sse_emitter
-            .emit_status(&task_id, "planning")
-            .await;
+        state.sse_emitter.emit_status(&task_id, "planning").await;
 
         // Resume agent in background
         let state_clone = state.clone();
@@ -1070,9 +1084,13 @@ async fn handle_send_feedback(state: &AppState, args: Value) -> Value {
         let task_clone = task.clone();
         let msg = message.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                crate::routes::tasks::resume_agent_for_task(&state_clone, &id_clone, &task_clone, &msg)
-                    .await
+            if let Err(e) = crate::routes::tasks::resume_agent_for_task(
+                &state_clone,
+                &id_clone,
+                &task_clone,
+                &msg,
+            )
+            .await
             {
                 warn!(task_id = %id_clone, error = %e, "Failed to resume agent (MCP send_feedback plan)");
                 let tid = id_clone.clone();
@@ -1143,10 +1161,7 @@ async fn handle_send_feedback(state: &AppState, args: Value) -> Value {
             )
         })
         .await;
-    state
-        .sse_emitter
-        .emit_status(&task_id, "planning")
-        .await;
+    state.sse_emitter.emit_status(&task_id, "planning").await;
 
     // Resume agent in background
     let state_clone = state.clone();
@@ -1289,10 +1304,7 @@ async fn handle_cancel_task(state: &AppState, args: Value) -> Value {
                 )
             })
             .await;
-        state
-            .sse_emitter
-            .emit_status(&task_id, "canceled")
-            .await;
+        state.sse_emitter.emit_status(&task_id, "canceled").await;
         state
             .data_emitter
             .emit_change("task", "updated", Some(&task_id));
@@ -1300,7 +1312,9 @@ async fn handle_cancel_task(state: &AppState, args: Value) -> Value {
         return tool_result(&json!({ "status": "canceled" }));
     }
 
-    tool_error("No agent is currently running for this task. Use get_task to check current task status.")
+    tool_error(
+        "No agent is currently running for this task. Use get_task to check current task status.",
+    )
 }
 
 // ============================================================================
@@ -1353,7 +1367,11 @@ async fn handle_approve_changes(state: &AppState, args: Value) -> Value {
 
     // Load task
     let tid = task_id.clone();
-    let task = match state.db.call(move |conn| task_service::get_task_by_id(conn, &tid)).await {
+    let task = match state
+        .db
+        .call(move |conn| task_service::get_task_by_id(conn, &tid))
+        .await
+    {
         Ok(t) => t,
         Err(e) => return tool_app_error("approve_changes", e),
     };
@@ -1368,12 +1386,20 @@ async fn handle_approve_changes(state: &AppState, args: Value) -> Value {
 
     // Set status to approved
     let tid = task_id.clone();
-    if let Err(e) = state.db.call(move |conn| {
-        task_service::update_task(conn, &tid, &crate::models::task::UpdateTaskInput {
-            status: Some(TaskStatus::Approved),
-            ..Default::default()
+    if let Err(e) = state
+        .db
+        .call(move |conn| {
+            task_service::update_task(
+                conn,
+                &tid,
+                &crate::models::task::UpdateTaskInput {
+                    status: Some(TaskStatus::Approved),
+                    ..Default::default()
+                },
+            )
         })
-    }).await {
+        .await
+    {
         return tool_app_error("approve_changes", e);
     }
     state.sse_emitter.emit_status(&task_id, "approved").await;
@@ -1431,9 +1457,7 @@ async fn handle_request_changes(state: &AppState, args: Value) -> Value {
     match result {
         Ok(data) => {
             if let Some(id) = data["id"].as_str() {
-                state
-                    .data_emitter
-                    .emit_change("task", "updated", Some(id));
+                state.data_emitter.emit_change("task", "updated", Some(id));
             }
             tool_result(&json!({
                 "status": "changes_requested",
@@ -1457,12 +1481,16 @@ async fn handle_delete_task(state: &AppState, args: Value) -> Value {
 
     // Check task exists
     let tid = task_id.clone();
-    let task = state.db.call(move |conn| {
-        crate::services::task_service::get_task_by_id(conn, &tid)
-    }).await;
+    let task = state
+        .db
+        .call(move |conn| crate::services::task_service::get_task_by_id(conn, &tid))
+        .await;
 
     if let Err(e) = &task {
-        return tool_app_error("delete_task", AppError::NotFound(format!("Task not found (id: {task_id}): {e}")));
+        return tool_app_error(
+            "delete_task",
+            AppError::NotFound(format!("Task not found (id: {task_id}): {e}")),
+        );
     }
 
     // Cancel running agent if any
@@ -1473,9 +1501,10 @@ async fn handle_delete_task(state: &AppState, args: Value) -> Value {
 
     // Delete task
     let tid = task_id.clone();
-    let delete_result = state.db.call(move |conn| {
-        crate::services::task_service::delete_task(conn, &tid)
-    }).await;
+    let delete_result = state
+        .db
+        .call(move |conn| crate::services::task_service::delete_task(conn, &tid))
+        .await;
 
     match delete_result {
         Ok(_) => {
@@ -1488,7 +1517,9 @@ async fn handle_delete_task(state: &AppState, args: Value) -> Value {
                 }
             });
 
-            state.data_emitter.emit_change("task", "deleted", Some(&task_id));
+            state
+                .data_emitter
+                .emit_change("task", "deleted", Some(&task_id));
             info!(id = %task_id, "delete_task (MCP)");
             tool_result(&json!({ "status": "deleted", "task_id": task_id }))
         }
@@ -1510,16 +1541,25 @@ async fn handle_pr_lifecycle(state: &AppState, args: Value, action: &str) -> Val
     };
 
     let tid = task_id.clone();
-    let result = state.db.call(move |conn| {
-        task_service::update_task(conn, &tid, &crate::models::task::UpdateTaskInput {
-            status: Some(new_status),
-            ..Default::default()
+    let result = state
+        .db
+        .call(move |conn| {
+            task_service::update_task(
+                conn,
+                &tid,
+                &crate::models::task::UpdateTaskInput {
+                    status: Some(new_status),
+                    ..Default::default()
+                },
+            )
         })
-    }).await;
+        .await;
 
     match result {
         Ok(_) => {
-            state.data_emitter.emit_change("task", "updated", Some(&task_id));
+            state
+                .data_emitter
+                .emit_change("task", "updated", Some(&task_id));
             info!(id = %task_id, action = action, "pr_lifecycle (MCP)");
             tool_result(&json!({ "status": status_str, "message": message }))
         }
@@ -1532,8 +1572,7 @@ async fn handle_get_setup_status(state: &AppState) -> Value {
     let result = state
         .db
         .call(|conn| {
-            let status =
-                crate::services::secrets_service::get_all_secrets_status(conn)?;
+            let status = crate::services::secrets_service::get_all_secrets_status(conn)?;
 
             info!("get_setup_status via MCP");
 

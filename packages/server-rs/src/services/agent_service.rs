@@ -6,7 +6,9 @@ use tokio::sync::RwLock;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 
-use crate::agent::{APIAgentRunner, APIRunnerOptions, CLIAgentRunner, CLIRunnerOptions};
+use crate::agent::{
+    APIAgentRunner, APIRunnerOptions, AgentRunResult, CLIAgentRunner, CLIRunnerOptions,
+};
 use crate::db::Database;
 use crate::error::AppError;
 use crate::models::task::{TaskStatus, UpdateTaskInput};
@@ -101,11 +103,7 @@ impl AgentService {
     /// Spawns the agent as a background Tokio task and returns immediately.
     /// Supports both CLI runners (claude-code, codex, etc.) and API runners (MiniMax).
     /// The result of the agent run is communicated via SSE events.
-    pub async fn start_agent(
-        &self,
-        task_id: &str,
-        options: RunnerOptions,
-    ) -> Result<(), AppError> {
+    pub async fn start_agent(&self, task_id: &str, options: RunnerOptions) -> Result<(), AppError> {
         // Check if agent is already running
         {
             let agents = self.active_agents.read().await;
@@ -125,10 +123,15 @@ impl AgentService {
         // Extract workspace path and create the appropriate runner
         let (workspace_path, cancel_token, feedback_tx, runner_kind) = match options {
             RunnerOptions::CLI(cli_opts) => {
+                let action = if cli_opts.resume_session_id.is_some() {
+                    "Resuming CLI agent session"
+                } else {
+                    "Starting CLI agent"
+                };
                 self.log(
                     task_id,
                     "info",
-                    &format!("Starting CLI agent: {}", cli_opts.agent_type),
+                    &format!("{action}: {}", cli_opts.agent_type),
                     None,
                 )
                 .await;
@@ -136,7 +139,12 @@ impl AgentService {
                 let runner = CLIAgentRunner::new(cli_opts);
                 let cancel_token = runner.cancel_token();
                 let feedback_tx = runner.feedback_sender();
-                (workspace_path, cancel_token, feedback_tx, RunnerKind::CLI(runner))
+                (
+                    workspace_path,
+                    cancel_token,
+                    feedback_tx,
+                    RunnerKind::CLI(runner),
+                )
             }
             RunnerOptions::API(api_opts) => {
                 self.log(
@@ -150,7 +158,12 @@ impl AgentService {
                 let runner = APIAgentRunner::new(api_opts);
                 let cancel_token = runner.cancel_token();
                 let feedback_tx = runner.feedback_sender();
-                (workspace_path, cancel_token, feedback_tx, RunnerKind::API(runner))
+                (
+                    workspace_path,
+                    cancel_token,
+                    feedback_tx,
+                    RunnerKind::API(runner),
+                )
             }
         };
 
@@ -197,29 +210,40 @@ impl AgentService {
                     // Use base_commit (captured at task start) so the diff is
                     // scoped to only this task's changes, not all accumulated
                     // changes from previous tasks in the same worktree.
-                    sse.emit_log(&task_id_bg, "info", "Extracting changes from workspace...", None)
-                        .await;
+                    sse.emit_log(
+                        &task_id_bg,
+                        "info",
+                        "Extracting changes from workspace...",
+                        None,
+                    )
+                    .await;
                     let base_commit = if let Some(ref db) = db {
                         let tid = task_id_bg.clone();
-                        db.call(move |conn| {
-                            task_service::get_task_by_id(conn, &tid)
-                        })
-                        .await
-                        .ok()
-                        .and_then(|t| t.base_commit)
+                        db.call(move |conn| task_service::get_task_by_id(conn, &tid))
+                            .await
+                            .ok()
+                            .and_then(|t| t.base_commit)
                     } else {
                         None
                     };
-                    let changes_data = extract_changes_data(
-                        &workspace_path,
-                        base_commit.as_deref(),
-                    ).await;
+                    let changes_data =
+                        extract_changes_data(&workspace_path, base_commit.as_deref()).await;
                     if changes_data.is_some() {
-                        sse.emit_log(&task_id_bg, "info", "Changes data extracted successfully", None)
-                            .await;
+                        sse.emit_log(
+                            &task_id_bg,
+                            "info",
+                            "Changes data extracted successfully",
+                            None,
+                        )
+                        .await;
                     } else {
-                        sse.emit_log(&task_id_bg, "warn", "No changes detected in workspace", None)
-                            .await;
+                        sse.emit_log(
+                            &task_id_bg,
+                            "warn",
+                            "No changes detected in workspace",
+                            None,
+                        )
+                        .await;
                     }
 
                     // Update task status to awaiting_review and persist changes
@@ -325,6 +349,107 @@ impl AgentService {
         );
 
         Ok(())
+    }
+
+    /// Runs an agent under AgentService tracking, returning the result to the caller.
+    ///
+    /// This is useful for non-task workflows, such as spec generation, that still need
+    /// live SSE output and user feedback while the agent is running but do not want the
+    /// task-specific completion behavior from `start_agent`.
+    pub async fn run_tracked_agent(
+        &self,
+        task_id: &str,
+        options: RunnerOptions,
+    ) -> Result<AgentRunResult, AppError> {
+        {
+            let agents = self.active_agents.read().await;
+            if agents.contains_key(task_id) {
+                return Err(AppError::Conflict(format!(
+                    "Agent is already running for {task_id}"
+                )));
+            }
+        }
+
+        let (cancel_token, feedback_tx, runner_kind) = match options {
+            RunnerOptions::CLI(cli_opts) => {
+                let action = if cli_opts.resume_session_id.is_some() {
+                    "Resuming CLI agent session"
+                } else {
+                    "Starting CLI agent"
+                };
+                self.log(
+                    task_id,
+                    "info",
+                    &format!("{action}: {}", cli_opts.agent_type),
+                    None,
+                )
+                .await;
+                let runner = CLIAgentRunner::new(cli_opts);
+                let cancel_token = runner.cancel_token();
+                let feedback_tx = runner.feedback_sender();
+                (cancel_token, feedback_tx, RunnerKind::CLI(runner))
+            }
+            RunnerOptions::API(api_opts) => {
+                self.log(
+                    task_id,
+                    "info",
+                    &format!("Starting API agent: {}", api_opts.agent_type),
+                    None,
+                )
+                .await;
+                let runner = APIAgentRunner::new(api_opts);
+                let cancel_token = runner.cancel_token();
+                let feedback_tx = runner.feedback_sender();
+                (cancel_token, feedback_tx, RunnerKind::API(runner))
+            }
+        };
+
+        let now = Instant::now();
+        {
+            let mut agents = self.active_agents.write().await;
+            agents.insert(
+                task_id.to_string(),
+                AgentTracking {
+                    task_id: task_id.to_string(),
+                    started_at: now,
+                    timeout_at: now + DEFAULT_TIMEOUT,
+                    warning_sent: false,
+                    cancel_token,
+                    feedback_tx,
+                },
+            );
+        }
+
+        let result = match runner_kind {
+            RunnerKind::CLI(mut runner) => runner.run(&self.sse_emitter).await,
+            RunnerKind::API(mut runner) => runner.run(&self.sse_emitter).await,
+        };
+
+        {
+            let mut agents = self.active_agents.write().await;
+            agents.remove(task_id);
+        }
+
+        match result {
+            Ok(res) if res.success => {
+                self.sse_emitter
+                    .emit_log(task_id, "info", "Agent completed successfully", None)
+                    .await;
+                Ok(res)
+            }
+            Ok(res) => {
+                let err = res
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Agent generation failed".to_string());
+                self.sse_emitter.emit_error(task_id, &err).await;
+                Ok(res)
+            }
+            Err(e) => {
+                self.sse_emitter.emit_error(task_id, &e.to_string()).await;
+                Err(e)
+            }
+        }
     }
 
     /// Records a log entry for a task.
@@ -476,8 +601,7 @@ async fn resolve_diff_base(
 ) -> Option<String> {
     if let Some(hint) = base_ref_hint {
         // If it looks like a full SHA-1 hash, verify it directly
-        let is_commit_hash = hint.len() >= 7
-            && hint.chars().all(|c| c.is_ascii_hexdigit());
+        let is_commit_hash = hint.len() >= 7 && hint.chars().all(|c| c.is_ascii_hexdigit());
         if is_commit_hash {
             let verify_ref = format!("{hint}^{{commit}}");
             let result = GitService::exec_git(
@@ -508,12 +632,8 @@ async fn resolve_diff_base(
         }
 
         // Try as local branch
-        let result = GitService::exec_git(
-            &["rev-parse", "--verify", hint],
-            workspace_path,
-            None,
-        )
-        .await;
+        let result =
+            GitService::exec_git(&["rev-parse", "--verify", hint], workspace_path, None).await;
         if let Ok(r) = result {
             if r.exit_code == 0 {
                 return Some(hint.to_string());
@@ -523,12 +643,8 @@ async fn resolve_diff_base(
 
     // Fallback: try origin/main, origin/master, main, master
     for candidate in &["origin/main", "origin/master", "main", "master"] {
-        let result = GitService::exec_git(
-            &["rev-parse", "--verify", candidate],
-            workspace_path,
-            None,
-        )
-        .await;
+        let result =
+            GitService::exec_git(&["rev-parse", "--verify", candidate], workspace_path, None).await;
         if let Ok(r) = result {
             if r.exit_code == 0 {
                 return Some(candidate.to_string());
@@ -540,20 +656,13 @@ async fn resolve_diff_base(
 }
 
 /// Gets the full diff text from a workspace.
-async fn get_workspace_diff(
-    workspace_path: &std::path::Path,
-    base_ref: Option<&str>,
-) -> String {
+async fn get_workspace_diff(workspace_path: &std::path::Path, base_ref: Option<&str>) -> String {
     let mut diff = String::new();
 
     // Get committed changes against base
     if let Some(base) = base_ref {
-        if let Ok(result) = GitService::exec_git(
-            &["diff", base, "HEAD"],
-            workspace_path,
-            None,
-        )
-        .await
+        if let Ok(result) =
+            GitService::exec_git(&["diff", base, "HEAD"], workspace_path, None).await
         {
             if result.exit_code == 0 && !result.stdout.is_empty() {
                 diff.push_str(&result.stdout);
@@ -620,8 +729,7 @@ async fn get_changed_file_list(
     // exec_git() trims the full output, which strips the leading space on the first line.
     // To work around this, we parse more defensively using the last 2 non-space chars
     // before the filename.
-    if let Ok(result) =
-        GitService::exec_git(&["status", "--porcelain"], workspace_path, None).await
+    if let Ok(result) = GitService::exec_git(&["status", "--porcelain"], workspace_path, None).await
     {
         if result.exit_code == 0 {
             for line in result.stdout.lines().filter(|l| !l.is_empty()) {
@@ -686,9 +794,12 @@ async fn get_changed_file_list(
 
         // Fallback: uncommitted numstat
         if additions == 0 && deletions == 0 && *status != "deleted" {
-            if let Ok(result) =
-                GitService::exec_git(&["diff", "--numstat", "--", file_path], workspace_path, None)
-                    .await
+            if let Ok(result) = GitService::exec_git(
+                &["diff", "--numstat", "--", file_path],
+                workspace_path,
+                None,
+            )
+            .await
             {
                 if result.exit_code == 0 && !result.stdout.is_empty() {
                     let parts: Vec<&str> = result.stdout.split('\t').collect();
@@ -725,7 +836,9 @@ async fn get_changed_file_list(
             "deleted" => {
                 if let Some(base) = base_ref {
                     let spec = format!("{base}:{file_path}");
-                    if let Ok(r) = GitService::exec_git(&["show", &spec], workspace_path, None).await {
+                    if let Ok(r) =
+                        GitService::exec_git(&["show", &spec], workspace_path, None).await
+                    {
                         if r.exit_code == 0 && r.stdout.len() <= max_content_size {
                             file_json["oldContent"] = json!(r.stdout);
                         }
@@ -736,7 +849,9 @@ async fn get_changed_file_list(
             "modified" => {
                 if let Some(base) = base_ref {
                     let spec = format!("{base}:{file_path}");
-                    if let Ok(r) = GitService::exec_git(&["show", &spec], workspace_path, None).await {
+                    if let Ok(r) =
+                        GitService::exec_git(&["show", &spec], workspace_path, None).await
+                    {
                         if r.exit_code == 0 && r.stdout.len() <= max_content_size {
                             file_json["oldContent"] = json!(r.stdout);
                         }

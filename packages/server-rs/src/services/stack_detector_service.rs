@@ -79,7 +79,10 @@ fn state_management_patterns() -> Vec<(&'static str, Vec<&'static str>)> {
         ("MobX", vec!["mobx", "mobx-react"]),
         ("Pinia", vec!["pinia"]),
         ("Vuex", vec!["vuex"]),
-        ("TanStack Query", vec!["@tanstack/react-query", "react-query"]),
+        (
+            "TanStack Query",
+            vec!["@tanstack/react-query", "react-query"],
+        ),
         ("SWR", vec!["swr"]),
         ("XState", vec!["xstate"]),
     ]
@@ -115,10 +118,7 @@ fn testing_patterns() -> Vec<(&'static str, Vec<&'static str>)> {
 // ---------------------------------------------------------------------------
 
 /// Detects a single category (framework, styling, etc.) from the package.json deps.
-fn detect_category(
-    dep_names: &[String],
-    patterns: &[(&str, Vec<&str>)],
-) -> (Option<String>, f64) {
+fn detect_category(dep_names: &[String], patterns: &[(&str, Vec<&str>)]) -> (Option<String>, f64) {
     for (name, search_patterns) in patterns {
         if search_patterns.is_empty() {
             continue;
@@ -200,7 +200,10 @@ pub async fn detect_stack(repo_path: &Path) -> Result<StackDetectionResponse, Ap
             framework = Some("Python".to_string());
         } else if root_files.iter().any(|f| f == "Gemfile") {
             framework = Some("Ruby".to_string());
-        } else if root_files.iter().any(|f| f == "pom.xml" || f == "build.gradle") {
+        } else if root_files
+            .iter()
+            .any(|f| f == "pom.xml" || f == "build.gradle")
+        {
             framework = Some("Java".to_string());
         }
     }

@@ -31,9 +31,10 @@
   "scripts": {
     "build:shared": "npm run build -w @dash-agent/shared",
     "build:dashboard": "npm run build -w @dash-agent/dashboard",
-    "dev:dashboard": "npm run dev -w @dash-agent/dashboard",
+    "dev:dashboard": "npm run build:shared && npm run dev -w @dash-agent/dashboard",
     "dev:server": "cargo run --manifest-path packages/server-rs/Cargo.toml -- --port 8080 --no-open --no-pause-on-error",
     "dev": "npm run build:shared && npm run dev:server & npm run dev:dashboard",
+    "mcp:chrome": "npx -y mcp-proxy --port 8090 --server stream -- npx -y chrome-devtools-mcp@latest",
     "build": "npm run build:shared && npm run build:dashboard",
     "lint": "npm run lint --workspaces --if-present",
     "clean": "npm run clean -w @dash-agent/shared",

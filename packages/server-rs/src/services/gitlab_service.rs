@@ -73,13 +73,10 @@ pub fn is_gitlab_url(url: &str) -> bool {
 /// - `https://gitlab.com/user/repo.git`
 /// - `git@gitlab.com:user/repo.git`
 pub fn parse_gitlab_url(url: &str) -> Result<GitLabRepoInfo, AppError> {
-    let clean = url
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
+    let clean = url.trim_end_matches('/').trim_end_matches(".git");
 
     // Try HTTPS format
-    let https_re =
-        regex_lite::Regex::new(r"(?:https?://)?gitlab\.com/([^/]+)/([^/]+)").unwrap();
+    let https_re = regex_lite::Regex::new(r"(?:https?://)?gitlab\.com/([^/]+)/([^/]+)").unwrap();
     if let Some(caps) = https_re.captures(clean) {
         if let (Some(owner_m), Some(repo_m)) = (caps.get(1), caps.get(2)) {
             return Ok(GitLabRepoInfo {
@@ -137,9 +134,9 @@ fn gitlab_client(token: &str) -> Result<reqwest::Client, AppError> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         "PRIVATE-TOKEN",
-        token.parse().map_err(|_| {
-            AppError::Validation("Invalid GitLab token format".into())
-        })?,
+        token
+            .parse()
+            .map_err(|_| AppError::Validation("Invalid GitLab token format".into()))?,
     );
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -207,9 +204,7 @@ pub async fn create_merge_request(
     );
 
     let client = gitlab_client(token)?;
-    let url = format!(
-        "https://gitlab.com/api/v4/projects/{project_path}/merge_requests"
-    );
+    let url = format!("https://gitlab.com/api/v4/projects/{project_path}/merge_requests");
 
     let payload = serde_json::json!({
         "source_branch": source_branch,
@@ -271,9 +266,8 @@ pub async fn get_merge_request(
     );
 
     let client = gitlab_client(token)?;
-    let url = format!(
-        "https://gitlab.com/api/v4/projects/{project_path}/merge_requests/{mr_number}"
-    );
+    let url =
+        format!("https://gitlab.com/api/v4/projects/{project_path}/merge_requests/{mr_number}");
 
     let response = client
         .get(&url)
@@ -394,6 +388,10 @@ pub async fn get_merge_request_notes(
         })
         .collect();
 
-    debug!(mr_number, count = comments.len(), "Merge request notes fetched");
+    debug!(
+        mr_number,
+        count = comments.len(),
+        "Merge request notes fetched"
+    );
     Ok(comments)
 }

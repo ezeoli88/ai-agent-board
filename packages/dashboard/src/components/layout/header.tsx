@@ -1,17 +1,30 @@
 'use client'
 
 import { Link } from '@tanstack/react-router'
-import { Plus, Layers, Settings } from 'lucide-react'
+import { Menu, Plus, Layers, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from './theme-toggle'
+import { RoleSelector } from '@/features/settings'
 import { useTaskUIStore } from '@/features/tasks/stores/task-ui-store'
+import { useLayoutStore } from '@/stores/layout-store'
 
 export function Header() {
   const { openCreateModal } = useTaskUIStore()
+  const setMobileNavOpen = useLayoutStore((state) => state.setMobileNavOpen)
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex h-14 items-center px-4 md:px-6">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="mr-2 h-9 w-9 md:hidden"
+          onClick={() => setMobileNavOpen(true)}
+          aria-label="Open navigation menu"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+
         {/* Logo */}
         <div className="flex items-center">
           <Link
@@ -27,6 +40,8 @@ export function Header() {
 
         {/* Right side actions */}
         <div className="ml-auto flex items-center gap-2">
+          <RoleSelector compact showLabel={false} />
+
           {/* Create task button */}
           <Button
             size="sm"

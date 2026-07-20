@@ -70,8 +70,12 @@ pub struct GitHubOAuthService {
 impl GitHubOAuthService {
     /// Creates a new service, reading configuration from environment variables.
     pub fn new() -> Self {
-        let client_id = std::env::var("GITHUB_CLIENT_ID").ok().filter(|s| !s.is_empty());
-        let client_secret = std::env::var("GITHUB_CLIENT_SECRET").ok().filter(|s| !s.is_empty());
+        let client_id = std::env::var("GITHUB_CLIENT_ID")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let client_secret = std::env::var("GITHUB_CLIENT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty());
         let redirect_uri = std::env::var("GITHUB_REDIRECT_URI")
             .unwrap_or_else(|_| "http://localhost:3003/setup/github/callback".into());
 
@@ -151,11 +155,7 @@ impl GitHubOAuthService {
     }
 
     /// Exchanges an authorization code for an access token and fetches user info.
-    pub async fn exchange_code(
-        &self,
-        code: &str,
-        state: &str,
-    ) -> Result<OAuthToken, AppError> {
+    pub async fn exchange_code(&self, code: &str, state: &str) -> Result<OAuthToken, AppError> {
         info!("Handling GitHub OAuth callback");
 
         // Validate state
@@ -191,7 +191,9 @@ impl GitHubOAuthService {
             }))
             .send()
             .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Token exchange request failed: {e}")))?;
+            .map_err(|e| {
+                AppError::Internal(anyhow::anyhow!("Token exchange request failed: {e}"))
+            })?;
 
         if !response.status().is_success() {
             error!(status = %response.status(), "Token exchange failed");
@@ -205,10 +207,9 @@ impl GitHubOAuthService {
             error_description: Option<String>,
         }
 
-        let token_data: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse token response: {e}")))?;
+        let token_data: TokenResponse = response.json().await.map_err(|e| {
+            AppError::Internal(anyhow::anyhow!("Failed to parse token response: {e}"))
+        })?;
 
         if let Some(ref err) = token_data.error {
             error!(
@@ -222,9 +223,9 @@ impl GitHubOAuthService {
             )));
         }
 
-        let access_token = token_data.access_token.ok_or_else(|| {
-            AppError::Internal(anyhow::anyhow!("No access token in response"))
-        })?;
+        let access_token = token_data
+            .access_token
+            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("No access token in response")))?;
 
         // Fetch user info
         let user_response = client
